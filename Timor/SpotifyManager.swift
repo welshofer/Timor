@@ -13,6 +13,10 @@ import AppKit
 import UniformTypeIdentifiers
 import SwiftData
 
+extension UTType {
+    static var spotifyTrack: UTType = UTType(exportedAs: "xsf.welshofer.Timor.spotifytrack")
+}
+
 @MainActor
 class SpotifyManager: ObservableObject {
     static let shared = SpotifyManager()
@@ -37,7 +41,7 @@ class SpotifyManager: ObservableObject {
         let owner: String
     }
 
-    struct Track: Identifiable, Hashable {
+    struct Track: Identifiable, Hashable, Codable, Transferable {
         let id: String
         let trackId: String  // Original Spotify track ID
         let name: String
@@ -46,6 +50,10 @@ class SpotifyManager: ObservableObject {
         let releaseDate: String
         let duration: String
         let uri: String
+
+        static var transferRepresentation: some TransferRepresentation {
+            CodableRepresentation(contentType: .spotifyTrack)
+        }
     }
 
     private init() {
