@@ -412,19 +412,25 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 100) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
-        // Build search query - just use plain text search, let Spotify figure it out
+        // Build search query with field-specific filters when provided
         var queryParts: [String] = []
+
+        // Only add field filters if that specific field has content
         if !title.isEmpty {
-            queryParts.append(title)
+            // For title, use track: filter
+            queryParts.append("track:\(title)")
         }
         if !artist.isEmpty {
-            queryParts.append(artist)
+            // For artist, use artist: filter
+            queryParts.append("artist:\(artist)")
         }
         if !album.isEmpty {
-            queryParts.append(album)
+            // For album, use album: filter
+            queryParts.append("album:\(album)")
         }
         if !year.isEmpty {
-            queryParts.append(year)
+            // For year, use year: filter
+            queryParts.append("year:\(year)")
         }
 
         // If no search terms, return empty
