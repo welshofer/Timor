@@ -39,6 +39,7 @@ class SpotifyManager: ObservableObject {
         let name: String
         let totalTracks: Int
         let owner: String
+        let isEditable: Bool
     }
 
     struct Track: Identifiable, Hashable, Codable, Transferable {

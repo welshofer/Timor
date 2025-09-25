@@ -20,6 +20,14 @@ struct ContentView: View {
     @State private var selectedTracks: Set<SpotifyManager.Track.ID> = []
     @State private var showDeleteConfirmation = false
     @State private var isDeleting = false
+    @State private var showOnlyEditablePlaylists = true
+
+    var filteredPlaylists: [SpotifyManager.Playlist] {
+        if showOnlyEditablePlaylists {
+            return spotifyManager.playlists.filter { $0.isEditable }
+        }
+        return spotifyManager.playlists
+    }
 
     var filteredTracks: [SpotifyManager.Track] {
         if searchText.isEmpty {
@@ -62,7 +70,12 @@ struct ContentView: View {
                         .foregroundColor(.red)
 
                         if !spotifyManager.playlists.isEmpty {
-                            ForEach(spotifyManager.playlists) { playlist in
+                            Toggle("Only Editable", isOn: $showOnlyEditablePlaylists)
+                                .toggleStyle(.switch)
+                                .font(.caption)
+                                .padding(.horizontal)
+
+                            ForEach(filteredPlaylists) { playlist in
                                 Button {
                                     selectedPlaylist = playlist
                                     searchText = ""
@@ -70,9 +83,16 @@ struct ContentView: View {
                                     spotifyManager.fetchTracksForPlaylist(playlist.id)
                                 } label: {
                                     VStack(alignment: .leading) {
-                                        Text(playlist.name)
-                                            .font(.headline)
-                                        Text("\(playlist.totalTracks) tracks")
+                                        HStack {
+                                            Text(playlist.name)
+                                                .font(.headline)
+                                            if !playlist.isEditable {
+                                                Image(systemName: "lock.fill")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Text("\(playlist.totalTracks) tracks • \(playlist.owner)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
@@ -269,7 +289,7 @@ struct ContentView: View {
                         .help("Refresh playlist tracks")
                     }
 
-                    if !selectedTracks.isEmpty {
+                    if !selectedTracks.isEmpty && (selectedPlaylist?.isEditable ?? false) {
                         ToolbarItem(placement: .primaryAction) {
                             Button {
                                 showDeleteConfirmation = true
@@ -290,17 +310,19 @@ struct ContentView: View {
                             .help("Export playlist to CSV file")
                         }
 
-                        ToolbarItem(placement: .primaryAction) {
-                            Button {
-                                Task {
-                                    shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
-                                    showShuffleAlert = true
+                        if selectedPlaylist?.isEditable ?? false {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button {
+                                    Task {
+                                        shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
+                                        showShuffleAlert = true
+                                    }
+                                } label: {
+                                    Label("Shuffle", systemImage: "shuffle")
                                 }
-                            } label: {
-                                Label("Shuffle", systemImage: "shuffle")
+                                .disabled(spotifyManager.isShuffling || spotifyManager.isLoadingTracks)
+                                .help("Shuffle and save playlist order")
                             }
-                            .disabled(spotifyManager.isShuffling || spotifyManager.isLoadingTracks)
-                            .help("Shuffle and save playlist order")
                         }
                     }
                 }

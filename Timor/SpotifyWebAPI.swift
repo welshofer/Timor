@@ -21,6 +21,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
     private let keychain = KeychainManager.shared
     private var authSession: ASWebAuthenticationSession?
+    private var currentUserId: String?
 
     private let baseURL = "https://api.spotify.com/v1"
     private let tokenURL = "https://accounts.spotify.com/api/token"
@@ -235,8 +236,34 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
     }
 
+    func fetchCurrentUser() async -> String? {
+        guard let accessToken = accessToken else { return nil }
+        guard let url = URL(string: "\(baseURL)/me") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let userId = json["id"] as? String {
+                currentUserId = userId
+                return userId
+            }
+        } catch {
+            print("Error fetching current user: \(error)")
+        }
+        return nil
+    }
+
     func fetchUserPlaylists() async -> [SpotifyManager.Playlist] {
         guard let accessToken = accessToken else { return [] }
+
+        // Get current user ID if we don't have it
+        if currentUserId == nil {
+            _ = await fetchCurrentUser()
+        }
+
         guard let url = URL(string: "\(baseURL)/me/playlists?limit=50") else { return [] }
 
         var request = URLRequest(url: url)
@@ -258,11 +285,13 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             let playlistResponse = try JSONDecoder().decode(PlaylistResponse.self, from: data)
 
             return playlistResponse.items.map { item in
-                SpotifyManager.Playlist(
+                let isOwner = currentUserId != nil && item.owner.id == currentUserId
+                return SpotifyManager.Playlist(
                     id: item.id,
                     name: item.name,
                     totalTracks: item.tracks.total,
-                    owner: item.owner.display_name ?? item.owner.id
+                    owner: item.owner.display_name ?? item.owner.id,
+                    isEditable: isOwner || item.collaborative
                 )
             }
         } catch {
@@ -560,6 +589,7 @@ struct PlaylistItem: Codable {
     let name: String
     let owner: Owner
     let tracks: Tracks
+    let collaborative: Bool
 }
 
 struct Owner: Codable {
