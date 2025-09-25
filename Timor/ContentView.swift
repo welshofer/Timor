@@ -34,6 +34,19 @@ struct ContentView: View {
         }
     }
 
+    // Safe selection that only includes tracks in current filtered results
+    var safeSelection: Binding<Set<SpotifyManager.Track.ID>> {
+        Binding(
+            get: {
+                let validIDs = Set(filteredTracks.map { $0.id })
+                return selectedTracks.intersection(validIDs)
+            },
+            set: { newSelection in
+                selectedTracks = newSelection
+            }
+        )
+    }
+
 
     var body: some View {
         NavigationSplitView {
@@ -155,7 +168,7 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         // Always use Table with resizable columns
-                        Table(filteredTracks, selection: $selectedTracks) {
+                        Table(filteredTracks, selection: safeSelection) {
                             TableColumn("Title", value: \.name)
                                 .width(min: 200)
                             TableColumn("Artist", value: \.artist)
@@ -236,6 +249,7 @@ struct ContentView: View {
                                 }
                             }
                         }
+                        .id("\(selectedPlaylist?.id ?? "")-\(searchText)") // Force table recreation on search
                     }
                 }
                 .searchable(text: $searchText, prompt: "Search tracks")
