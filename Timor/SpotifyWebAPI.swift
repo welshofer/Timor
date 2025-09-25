@@ -409,7 +409,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return dateString
     }
 
-    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 100) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
         // Build search query

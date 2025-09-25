@@ -20,6 +20,7 @@ struct TrackSearchView: View {
     @State private var selectedTracks: Set<SpotifyManager.Track.ID> = []
     @State private var isSearching = false
     @State private var isAdding = false
+    @State private var sortOrder = [KeyPathComparator(\SpotifyManager.Track.name)]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -96,6 +97,22 @@ struct TrackSearchView: View {
 
             Divider()
 
+            // Result count
+            if !searchResults.isEmpty && !isSearching {
+                HStack {
+                    Text("\(searchResults.count) results")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("Click column headers to sort")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            }
+
             // Results table
             if isSearching {
                 VStack {
@@ -106,11 +123,16 @@ struct TrackSearchView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if searchResults.isEmpty {
-                Text("Enter search terms and click Search")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack {
+                    Text("Enter search terms and click Search")
+                        .foregroundColor(.secondary)
+                    Text("Up to 100 results will be shown")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(searchResults, selection: $selectedTracks) {
+                Table(searchResults, selection: $selectedTracks, sortOrder: $sortOrder) {
                     TableColumn("Title", value: \.name)
                         .width(min: 200)
                     TableColumn("Artist", value: \.artist)
@@ -121,6 +143,9 @@ struct TrackSearchView: View {
                         .width(ideal: 80, max: 100)
                     TableColumn("Duration", value: \.duration)
                         .width(ideal: 60, max: 80)
+                }
+                .onChange(of: sortOrder) { newOrder in
+                    searchResults.sort(using: newOrder)
                 }
             }
 
