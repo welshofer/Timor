@@ -412,24 +412,22 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 100) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
-        // Build search query with field-specific filters when provided
+        // Build search query - try using wildcards for partial matching
         var queryParts: [String] = []
 
-        // Only add field filters if that specific field has content
         if !title.isEmpty {
-            // For title, use track: filter
-            queryParts.append("track:\(title)")
+            // Use wildcard for partial matching
+            queryParts.append("track:\(title)*")
         }
         if !artist.isEmpty {
-            // For artist, use artist: filter
-            queryParts.append("artist:\(artist)")
+            // Use wildcard for partial matching
+            queryParts.append("artist:\(artist)*")
         }
         if !album.isEmpty {
-            // For album, use album: filter
-            queryParts.append("album:\(album)")
+            // Use wildcard for partial matching
+            queryParts.append("album:\(album)*")
         }
         if !year.isEmpty {
-            // For year, use year: filter
             queryParts.append("year:\(year)")
         }
 
