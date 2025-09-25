@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var showDeleteConfirmation = false
     @State private var isDeleting = false
     @State private var showOnlyEditablePlaylists = true
+    @State private var showTrackSearch = false
 
     var filteredPlaylists: [SpotifyManager.Playlist] {
         if showOnlyEditablePlaylists {
@@ -278,6 +279,17 @@ struct ContentView: View {
                     selectedTracks.removeAll()
                 }
                 .toolbar {
+                    if selectedPlaylist?.isEditable ?? false {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button {
+                                showTrackSearch = true
+                            } label: {
+                                Label("Add Tracks", systemImage: "plus")
+                            }
+                            .help("Search and add tracks to this playlist")
+                        }
+                    }
+
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             searchText = ""
@@ -335,6 +347,15 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showTrackSearch) {
+            if let playlist = selectedPlaylist {
+                TrackSearchView(
+                    isPresented: $showTrackSearch,
+                    playlistId: playlist.id,
+                    playlistName: playlist.name
+                )
+            }
         }
         .alert("Playlist Shuffle", isPresented: $showShuffleAlert) {
             Button("OK") { }

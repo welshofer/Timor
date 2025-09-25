@@ -409,6 +409,126 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return dateString
     }
 
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
+        guard let accessToken = accessToken else { return [] }
+
+        // Build search query
+        var queryParts: [String] = []
+        if !title.isEmpty {
+            queryParts.append("track:\"\(title)\"")
+        }
+        if !artist.isEmpty {
+            queryParts.append("artist:\"\(artist)\"")
+        }
+        if !album.isEmpty {
+            queryParts.append("album:\"\(album)\"")
+        }
+        if !year.isEmpty {
+            queryParts.append("year:\(year)")
+        }
+
+        // If no search terms, return empty
+        if queryParts.isEmpty {
+            return []
+        }
+
+        let query = queryParts.joined(separator: " ")
+        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
+        guard let url = URL(string: "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)") else { return [] }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
+                if await refreshAccessToken() {
+                    return await searchTracks(title: title, artist: artist, album: album, year: year, limit: limit)
+                } else {
+                    logout()
+                    return []
+                }
+            }
+
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let tracks = json["tracks"] as? [String: Any],
+               let items = tracks["items"] as? [[String: Any]] {
+
+                return items.compactMap { item in
+                    guard let id = item["id"] as? String,
+                          let name = item["name"] as? String,
+                          let uri = item["uri"] as? String,
+                          let artists = item["artists"] as? [[String: Any]],
+                          let firstArtist = artists.first?["name"] as? String,
+                          let album = item["album"] as? [String: Any],
+                          let albumName = album["name"] as? String,
+                          let duration_ms = item["duration_ms"] as? Int else {
+                        return nil
+                    }
+
+                    let releaseDate = (album["release_date"] as? String) ?? ""
+                    let minutes = duration_ms / 60000
+                    let seconds = (duration_ms % 60000) / 1000
+                    let duration = String(format: "%d:%02d", minutes, seconds)
+
+                    return SpotifyManager.Track(
+                        id: UUID().uuidString, // Unique ID for table selection
+                        trackId: id,
+                        name: name,
+                        artist: firstArtist,
+                        album: albumName,
+                        releaseDate: releaseDate,
+                        duration: duration,
+                        uri: uri
+                    )
+                }
+            }
+        } catch {
+            print("Error searching tracks: \(error)")
+        }
+
+        return []
+    }
+
+    func addTracksToPlaylist(playlistId: String, trackUris: [String]) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+        guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/tracks") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = ["uris": trackUris]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await addTracksToPlaylist(playlistId: playlistId, trackUris: trackUris)
+                    } else {
+                        logout()
+                        return false
+                    }
+                } else if httpResponse.statusCode == 201 {
+                    return true
+                } else {
+                    print("Failed to add tracks: HTTP \(httpResponse.statusCode)")
+                    return false
+                }
+            }
+        } catch {
+            print("Error adding tracks to playlist: \(error)")
+            return false
+        }
+
+        return false
+    }
+
     func deletePlaylistTracks(playlistId: String, trackUris: [String], positions: [[Int]]) async -> Bool {
         guard let accessToken = accessToken else { return false }
         guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/tracks") else { return false }
