@@ -10,6 +10,8 @@ import SwiftData
 
 @main
 struct TimorApp: App {
+    @State private var showingSettings = false
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -28,5 +30,9 @@ struct TimorApp: App {
             ContentView()
         }
         .modelContainer(sharedModelContainer)
+
+        Settings {
+            SettingsView()
+        }
     }
 }
