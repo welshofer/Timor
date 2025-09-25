@@ -126,7 +126,7 @@ struct TrackSearchView: View {
                 VStack {
                     Text("Enter search terms and click Search")
                         .foregroundColor(.secondary)
-                    Text("Up to 100 results will be shown")
+                    Text("Up to 50 results will be shown")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

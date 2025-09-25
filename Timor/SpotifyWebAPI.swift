@@ -409,7 +409,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return dateString
     }
 
-    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 100) async -> [SpotifyManager.Track] {
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
         // Build search query - EXACTLY AS IT WAS WHEN IT WORKED
@@ -436,11 +436,19 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
         guard let url = URL(string: "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)") else { return [] }
 
+        print("🔍 SEARCH QUERY: \(query)")
+        print("🔍 SEARCH URL: \(url.absoluteString)")
+
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+
+            // Log the raw response
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("🔍 RESPONSE (first 500 chars): \(String(responseString.prefix(500)))")
+            }
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                 if await refreshAccessToken() {
