@@ -35,6 +35,7 @@ struct ContentView: View {
         }
     }
 
+
     var body: some View {
         NavigationSplitView {
             List {
@@ -154,25 +155,43 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        Table(filteredTracks, selection: $selectedTracks) {
-                            TableColumn("Title", value: \.name)
-                                .width(min: 200)
-                            TableColumn("Artist", value: \.artist)
-                                .width(min: 150)
-                            TableColumn("Album", value: \.album)
-                                .width(min: 150)
-                            TableColumn("Release Date", value: \.releaseDate)
-                                .width(ideal: 100, max: 120)
-                            TableColumn("Duration", value: \.duration)
-                                .width(ideal: 60, max: 80)
+                        // Use List instead of Table to avoid crashes
+                        List(filteredTracks, selection: $selectedTracks) { track in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(track.name)
+                                        .font(.system(size: 13))
+                                        .lineLimit(1)
+                                    Text(track.artist)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                Text(track.album)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: 200, alignment: .leading)
+
+                                Text(track.releaseDate)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 80, alignment: .trailing)
+
+                                Text(track.duration)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 50, alignment: .trailing)
+                            }
+                            .padding(.vertical, 2)
                         }
+                        .listStyle(.inset)
                     }
                 }
                 .searchable(text: $searchText, prompt: "Search tracks")
-                .onChange(of: searchText) { _ in
-                    // Clear selection when searching to avoid crash
-                    selectedTracks = []
-                }
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
                         Button {
@@ -254,9 +273,10 @@ struct ContentView: View {
                     isDeleting = false
 
                     if success {
-                        selectedTracks = []
-                        // Optionally refresh the playlist to ensure sync
-                        spotifyManager.fetchTracksForPlaylist(playlist.id)
+                        // Only clear selection, keep search term
+                        await MainActor.run {
+                            selectedTracks.removeAll()
+                        }
                     } else {
                         // Show error alert
                         await MainActor.run {

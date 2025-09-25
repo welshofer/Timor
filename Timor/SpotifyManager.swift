@@ -11,6 +11,7 @@ import Combine
 import TabularData
 import AppKit
 import UniformTypeIdentifiers
+import SwiftData
 
 @MainActor
 class SpotifyManager: ObservableObject {
@@ -24,6 +25,8 @@ class SpotifyManager: ObservableObject {
     @Published var loadingProgress: (current: Int, total: Int) = (0, 0)
 
     private let keychain = KeychainManager.shared
+    private var modelContainer: ModelContainer?
+    private var modelContext: ModelContext?
 
     struct Playlist: Identifiable {
         let id: String
@@ -45,6 +48,28 @@ class SpotifyManager: ObservableObject {
 
     private init() {
         setupWebAPIObserver()
+        setupModelContainer()
+    }
+
+    private func setupModelContainer() {
+        do {
+            let schema = Schema([
+                CachedPlaylist.self,
+                CachedTrack.self
+            ])
+            // Use a separate store file to avoid conflicts with existing Item model
+            let url = URL.applicationSupportDirectory.appending(path: "SpotifyCache.store")
+            let modelConfiguration = ModelConfiguration(
+                schema: schema,
+                url: url,
+                allowsSave: true,
+                cloudKitDatabase: .none
+            )
+            modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            modelContext = modelContainer?.mainContext
+        } catch {
+            print("Failed to create ModelContainer: \(error)")
+        }
     }
 
     private func setupWebAPIObserver() {
@@ -113,22 +138,137 @@ class SpotifyManager: ObservableObject {
     func fetchTracksForPlaylist(_ playlistId: String) {
         Task {
             isLoadingTracks = true
-            currentPlaylistTracks = []
             loadingProgress = (0, 0)
 
-            let tracks = await SpotifyWebAPI.shared.fetchPlaylistTracks(
-                playlistId: playlistId,
-                progressHandler: { current, total in
-                    Task { @MainActor in
-                        self.loadingProgress = (current, total)
-                    }
+            // First, try to load from cache
+            if let cachedTracks = await loadCachedTracks(for: playlistId) {
+                await MainActor.run {
+                    self.currentPlaylistTracks = cachedTracks
+                    self.isLoadingTracks = false
                 }
-            )
 
-            await MainActor.run {
-                self.currentPlaylistTracks = tracks
-                self.isLoadingTracks = false
+                // Fetch fresh data in background to check for updates
+                Task.detached { [weak self] in
+                    await self?.syncPlaylistInBackground(playlistId)
+                }
+            } else {
+                // No cache, fetch from API
+                currentPlaylistTracks = []
+
+                let tracks = await SpotifyWebAPI.shared.fetchPlaylistTracks(
+                    playlistId: playlistId,
+                    progressHandler: { current, total in
+                        Task { @MainActor in
+                            self.loadingProgress = (current, total)
+                        }
+                    }
+                )
+
+                await MainActor.run {
+                    self.currentPlaylistTracks = tracks
+                    self.isLoadingTracks = false
+                }
+
+                // Cache the fetched tracks
+                await cachePlaylistTracks(playlistId: playlistId, tracks: tracks)
             }
+        }
+    }
+
+    private func loadCachedTracks(for playlistId: String) async -> [Track]? {
+        guard let modelContext = modelContext else { return nil }
+
+        let descriptor = FetchDescriptor<CachedPlaylist>(
+            predicate: #Predicate { $0.playlistId == playlistId }
+        )
+
+        do {
+            let cachedPlaylists = try modelContext.fetch(descriptor)
+            if let cachedPlaylist = cachedPlaylists.first,
+               let tracks = cachedPlaylist.tracks {
+                // Return tracks sorted by position
+                return tracks
+                    .sorted { $0.position < $1.position }
+                    .map { $0.toTrack() }
+            }
+        } catch {
+            print("Failed to load cached tracks: \(error)")
+        }
+
+        return nil
+    }
+
+    private func cachePlaylistTracks(playlistId: String, tracks: [Track]) async {
+        guard let modelContext = modelContext else { return }
+
+        // Find or create the cached playlist
+        let descriptor = FetchDescriptor<CachedPlaylist>(
+            predicate: #Predicate { $0.playlistId == playlistId }
+        )
+
+        do {
+            let cachedPlaylists = try modelContext.fetch(descriptor)
+            let cachedPlaylist: CachedPlaylist
+
+            if let existing = cachedPlaylists.first {
+                // Update existing playlist
+                cachedPlaylist = existing
+                // Clear old tracks
+                cachedPlaylist.tracks?.removeAll()
+            } else {
+                // Create new cached playlist
+                let playlist = playlists.first { $0.id == playlistId }
+                cachedPlaylist = CachedPlaylist(
+                    playlistId: playlistId,
+                    name: playlist?.name ?? "",
+                    owner: playlist?.owner ?? "",
+                    totalTracks: tracks.count
+                )
+                modelContext.insert(cachedPlaylist)
+            }
+
+            // Add tracks to cache
+            for (index, track) in tracks.enumerated() {
+                let cachedTrack = CachedTrack(
+                    trackId: track.trackId,
+                    uniqueId: track.id,
+                    name: track.name,
+                    artist: track.artist,
+                    album: track.album,
+                    releaseDate: track.releaseDate,
+                    duration: track.duration,
+                    uri: track.uri,
+                    position: index
+                )
+                cachedTrack.playlist = cachedPlaylist
+                modelContext.insert(cachedTrack)
+            }
+
+            cachedPlaylist.lastSynced = Date()
+            cachedPlaylist.totalTracks = tracks.count
+
+            try modelContext.save()
+        } catch {
+            print("Failed to cache playlist tracks: \(error)")
+        }
+    }
+
+    private func syncPlaylistInBackground(_ playlistId: String) async {
+        // Fetch fresh data from API
+        let freshTracks = await SpotifyWebAPI.shared.fetchPlaylistTracks(
+            playlistId: playlistId,
+            progressHandler: nil
+        )
+
+        // Compare with current tracks (simple comparison by count and first/last track)
+        if freshTracks.count != currentPlaylistTracks.count ||
+           freshTracks.first?.id != currentPlaylistTracks.first?.id ||
+           freshTracks.last?.id != currentPlaylistTracks.last?.id {
+            // Playlist has changed, update UI and cache
+            await MainActor.run {
+                self.currentPlaylistTracks = freshTracks
+            }
+            await cachePlaylistTracks(playlistId: playlistId, tracks: freshTracks)
         }
     }
 
@@ -163,6 +303,9 @@ class SpotifyManager: ObservableObject {
                     tracks.contains(where: { $0.id == track.id })
                 }
             }
+
+            // Update the cache
+            await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
         }
 
         return success
@@ -184,6 +327,9 @@ class SpotifyManager: ObservableObject {
             await MainActor.run {
                 self.currentPlaylistTracks = shuffledTracks
             }
+
+            // Update the cache with shuffled order
+            await cachePlaylistTracks(playlistId: playlistId, tracks: shuffledTracks)
         }
 
         return success
