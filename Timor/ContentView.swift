@@ -154,89 +154,61 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        // Force List recreation when search changes to avoid crashes
-                        if searchText.isEmpty {
-                            // Allow reordering only when not searching
-                            List(selection: $selectedTracks) {
-                                ForEach(spotifyManager.currentPlaylistTracks, id: \.id) { track in
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(track.name)
-                                                .font(.system(size: 13))
-                                                .lineLimit(1)
-                                            Text(track.artist)
-                                                .font(.system(size: 11))
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
+                        // Table with resizable columns - RESTORED!
+                        Table(filteredTracks, selection: $selectedTracks) {
+                            TableColumn("Title", value: \.name)
+                                .width(min: 200)
+                            TableColumn("Artist", value: \.artist)
+                                .width(min: 150)
+                            TableColumn("Album", value: \.album)
+                                .width(min: 150)
+                            TableColumn("Release Date", value: \.releaseDate)
+                                .width(ideal: 100, max: 120)
+                            TableColumn("Duration", value: \.duration)
+                                .width(ideal: 60, max: 80)
+                        }
+                        .contextMenu(forSelectionType: SpotifyManager.Track.ID.self) { items in
+                            if items.isEmpty {
+                                Text("No selection")
+                            } else if items.count == 1, searchText.isEmpty {
+                                // Single track - allow reordering via context menu
+                                Button("Move Up") {
+                                    if let trackId = items.first,
+                                       let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
+                                       index > 0 {
+                                        Task {
+                                            await spotifyManager.reorderTracks(
+                                                in: selectedPlaylist!.id,
+                                                from: IndexSet(integer: index),
+                                                to: index - 1
+                                            )
                                         }
-
-                                        Spacer()
-
-                                        Text(track.album)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .frame(maxWidth: 200, alignment: .leading)
-
-                                        Text(track.releaseDate)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                            .frame(width: 80, alignment: .trailing)
-
-                                        Text(track.duration)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                            .frame(width: 50, alignment: .trailing)
                                     }
-                                    .padding(.vertical, 2)
                                 }
-                                .onMove { source, destination in
-                                    Task {
-                                        await spotifyManager.reorderTracks(
-                                            in: playlist.id,
-                                            from: source,
-                                            to: destination
-                                        )
+                                Button("Move Down") {
+                                    if let trackId = items.first,
+                                       let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
+                                       index < spotifyManager.currentPlaylistTracks.count - 1 {
+                                        Task {
+                                            await spotifyManager.reorderTracks(
+                                                in: selectedPlaylist!.id,
+                                                from: IndexSet(integer: index),
+                                                to: index + 2
+                                            )
+                                        }
                                     }
+                                }
+                                Divider()
+                                Button("Delete", role: .destructive) {
+                                    showDeleteConfirmation = true
+                                }
+                            } else {
+                                Button("Delete \(items.count) tracks", role: .destructive) {
+                                    showDeleteConfirmation = true
                                 }
                             }
-                            .listStyle(.inset)
-                        } else {
-                            // No reordering while searching
-                            List(filteredTracks, id: \.id, selection: $selectedTracks) { track in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(track.name)
-                                            .font(.system(size: 13))
-                                            .lineLimit(1)
-                                        Text(track.artist)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-
-                                    Spacer()
-
-                                    Text(track.album)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
-                                        .frame(maxWidth: 200, alignment: .leading)
-
-                                    Text(track.releaseDate)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 80, alignment: .trailing)
-
-                                    Text(track.duration)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 50, alignment: .trailing)
-                                }
-                                .padding(.vertical, 2)
-                            }
-                            .listStyle(.inset)
-                            .id("\(playlist.id)-\(searchText)") // Force recreation on search change
+                        } primaryAction: { items in
+                            // Double-click could play the track if we had playback control
                         }
                     }
                 }
