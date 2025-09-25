@@ -154,140 +154,85 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        // Check if we should use drag-drop List or regular Table
-                        if searchText.isEmpty && !spotifyManager.currentPlaylistTracks.isEmpty {
-                            // Use List with drag and drop when not searching
-                            VStack(spacing: 0) {
-                                // Header row to mimic table columns
-                                HStack(spacing: 0) {
-                                    Text("Title")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 250, alignment: .leading)
-                                        .padding(.horizontal, 8)
-
-                                    Divider()
-                                        .frame(height: 12)
-
-                                    Text("Artist")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 200, alignment: .leading)
-                                        .padding(.horizontal, 8)
-
-                                    Divider()
-                                        .frame(height: 12)
-
-                                    Text("Album")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 200, alignment: .leading)
-                                        .padding(.horizontal, 8)
-
-                                    Divider()
-                                        .frame(height: 12)
-
-                                    Text("Release Date")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 100, alignment: .leading)
-                                        .padding(.horizontal, 8)
-
-                                    Divider()
-                                        .frame(height: 12)
-
-                                    Text("Duration")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 70, alignment: .leading)
-                                        .padding(.horizontal, 8)
-
-                                    Spacer()
-                                }
-                                .padding(.vertical, 4)
-                                .background(Color(NSColor.controlBackgroundColor))
-
-                                Divider()
-
-                                // Draggable list of tracks
-                                List(selection: $selectedTracks) {
-                                    ForEach(spotifyManager.currentPlaylistTracks, id: \.id) { track in
-                                        HStack(spacing: 0) {
-                                            Text(track.name)
-                                                .lineLimit(1)
-                                                .frame(width: 250, alignment: .leading)
-                                                .padding(.horizontal, 8)
-
-                                            Divider()
-                                                .frame(height: 16)
-
-                                            Text(track.artist)
-                                                .lineLimit(1)
-                                                .foregroundColor(.secondary)
-                                                .frame(width: 200, alignment: .leading)
-                                                .padding(.horizontal, 8)
-
-                                            Divider()
-                                                .frame(height: 16)
-
-                                            Text(track.album)
-                                                .lineLimit(1)
-                                                .foregroundColor(.secondary)
-                                                .frame(width: 200, alignment: .leading)
-                                                .padding(.horizontal, 8)
-
-                                            Divider()
-                                                .frame(height: 16)
-
-                                            Text(track.releaseDate)
-                                                .foregroundColor(.secondary)
-                                                .frame(width: 100, alignment: .leading)
-                                                .padding(.horizontal, 8)
-
-                                            Divider()
-                                                .frame(height: 16)
-
-                                            Text(track.duration)
-                                                .foregroundColor(.secondary)
-                                                .frame(width: 70, alignment: .leading)
-                                                .padding(.horizontal, 8)
-
-                                            Spacer()
-                                        }
-                                        .padding(.vertical, 2)
-                                        .draggable(track)
-                                    }
-                                    .onMove { source, destination in
+                        // Always use Table with resizable columns
+                        Table(filteredTracks, selection: $selectedTracks) {
+                            TableColumn("Title", value: \.name)
+                                .width(min: 200)
+                            TableColumn("Artist", value: \.artist)
+                                .width(min: 150)
+                            TableColumn("Album", value: \.album)
+                                .width(min: 150)
+                            TableColumn("Release Date", value: \.releaseDate)
+                                .width(ideal: 100, max: 120)
+                            TableColumn("Duration", value: \.duration)
+                                .width(ideal: 60, max: 80)
+                        }
+                        .contextMenu(forSelectionType: SpotifyManager.Track.ID.self) { items in
+                            if items.isEmpty {
+                                Text("No selection")
+                            } else if items.count == 1, searchText.isEmpty {
+                                // Single track - allow reordering via context menu
+                                Button("Move to Top") {
+                                    if let trackId = items.first,
+                                       let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
+                                       index > 0 {
                                         Task {
                                             await spotifyManager.reorderTracks(
                                                 in: selectedPlaylist!.id,
-                                                from: source,
-                                                to: destination
+                                                from: IndexSet(integer: index),
+                                                to: 0
                                             )
                                         }
                                     }
                                 }
-                                .listStyle(.plain)
-                            }
-                        } else {
-                            // Use regular Table when searching or empty
-                            Table(filteredTracks, selection: $selectedTracks) {
-                                TableColumn("Title", value: \.name)
-                                    .width(min: 200)
-                                TableColumn("Artist", value: \.artist)
-                                    .width(min: 150)
-                                TableColumn("Album", value: \.album)
-                                    .width(min: 150)
-                                TableColumn("Release Date", value: \.releaseDate)
-                                    .width(ideal: 100, max: 120)
-                                TableColumn("Duration", value: \.duration)
-                                    .width(ideal: 60, max: 80)
-                            }
-                            .contextMenu(forSelectionType: SpotifyManager.Track.ID.self) { items in
-                                if !items.isEmpty {
-                                    Button("Delete \(items.count) track\(items.count == 1 ? "" : "s")", role: .destructive) {
-                                        showDeleteConfirmation = true
+                                Button("Move Up") {
+                                    if let trackId = items.first,
+                                       let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
+                                       index > 0 {
+                                        Task {
+                                            await spotifyManager.reorderTracks(
+                                                in: selectedPlaylist!.id,
+                                                from: IndexSet(integer: index),
+                                                to: index - 1
+                                            )
+                                        }
                                     }
+                                }
+                                .keyboardShortcut("↑", modifiers: [.command])
+                                Button("Move Down") {
+                                    if let trackId = items.first,
+                                       let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
+                                       index < spotifyManager.currentPlaylistTracks.count - 1 {
+                                        Task {
+                                            await spotifyManager.reorderTracks(
+                                                in: selectedPlaylist!.id,
+                                                from: IndexSet(integer: index),
+                                                to: index + 2
+                                            )
+                                        }
+                                    }
+                                }
+                                .keyboardShortcut("↓", modifiers: [.command])
+                                Button("Move to Bottom") {
+                                    if let trackId = items.first,
+                                       let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
+                                       index < spotifyManager.currentPlaylistTracks.count - 1 {
+                                        Task {
+                                            await spotifyManager.reorderTracks(
+                                                in: selectedPlaylist!.id,
+                                                from: IndexSet(integer: index),
+                                                to: spotifyManager.currentPlaylistTracks.count
+                                            )
+                                        }
+                                    }
+                                }
+                                Divider()
+                                Button("Delete", role: .destructive) {
+                                    showDeleteConfirmation = true
+                                }
+                            } else {
+                                Button("Delete \(items.count) tracks", role: .destructive) {
+                                    showDeleteConfirmation = true
                                 }
                             }
                         }
