@@ -146,6 +146,21 @@ class SpotifyManager: ObservableObject {
         }
     }
 
+    func updatePlaylistTrackCount(_ playlistId: String, addedCount: Int) {
+        // Update the track count for the playlist in our local list
+        if let index = playlists.firstIndex(where: { $0.id == playlistId }) {
+            let playlist = playlists[index]
+            let updatedPlaylist = Playlist(
+                id: playlist.id,
+                name: playlist.name,
+                totalTracks: playlist.totalTracks + addedCount,
+                owner: playlist.owner,
+                isEditable: playlist.isEditable
+            )
+            playlists[index] = updatedPlaylist
+        }
+    }
+
     func fetchTracksForPlaylist(_ playlistId: String) {
         Task {
             isLoadingTracks = true
@@ -345,6 +360,8 @@ class SpotifyManager: ObservableObject {
                 self.currentPlaylistTracks.removeAll { track in
                     tracks.contains(where: { $0.id == track.id })
                 }
+                // Update track count in sidebar
+                self.updatePlaylistTrackCount(playlistId, addedCount: -tracks.count)
             }
 
             // Update the cache

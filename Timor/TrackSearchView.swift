@@ -210,6 +210,8 @@ struct TrackSearchView: View {
 
             await MainActor.run {
                 if success {
+                    // Update track count in sidebar
+                    SpotifyManager.shared.updatePlaylistTrackCount(playlistId, addedCount: tracksToAdd.count)
                     // Refresh the playlist to show new tracks
                     SpotifyManager.shared.fetchTracksForPlaylist(playlistId)
                     isPresented = false
