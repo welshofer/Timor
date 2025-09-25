@@ -47,6 +47,29 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         accessToken = try? keychain.retrieve(for: "spotify_web_access_token")
         refreshToken = try? keychain.retrieve(for: "spotify_web_refresh_token")
         isAuthenticated = accessToken != nil
+
+        // If we have tokens, validate them on startup
+        if accessToken != nil || refreshToken != nil {
+            Task {
+                await validateAndRefreshTokenIfNeeded()
+            }
+        }
+    }
+
+    func validateAndRefreshTokenIfNeeded() async {
+        // If we have a refresh token but no access token, or if access token might be expired
+        if refreshToken != nil {
+            // Try to refresh the token
+            if await refreshAccessToken() {
+                print("Successfully refreshed access token on startup")
+            } else if accessToken == nil {
+                // Only clear if we don't have a valid access token
+                print("Failed to refresh token on startup, will require re-authentication")
+                await MainActor.run {
+                    logout()
+                }
+            }
+        }
     }
 
     private func saveTokens(accessToken: String, refreshToken: String?) {
@@ -69,7 +92,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             return
         }
 
-        let scopes = "playlist-read-private playlist-read-collaborative user-read-private"
+        let scopes = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private"
         let state = UUID().uuidString
 
         var components = URLComponents(string: authURL)!
@@ -78,8 +101,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "scope", value: scopes),
-            URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "show_dialog", value: "true")
+            URLQueryItem(name: "state", value: state)
         ]
 
         guard let authURL = components.url else { return }
@@ -249,6 +271,213 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
     }
 
+    func fetchPlaylistTracks(playlistId: String, progressHandler: ((Int, Int) -> Void)? = nil) async -> [SpotifyManager.Track] {
+        guard let accessToken = accessToken else { return [] }
+
+        var allTracks: [SpotifyManager.Track] = []
+        var offset = 0
+        let limit = 100
+        var hasMore = true
+
+        while hasMore {
+            guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/tracks?limit=\(limit)&offset=\(offset)") else { break }
+
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
+                    // Token expired, try to refresh
+                    if await refreshAccessToken() {
+                        return await fetchPlaylistTracks(playlistId: playlistId, progressHandler: progressHandler)
+                    } else {
+                        logout()
+                        return []
+                    }
+                }
+
+                let tracksResponse = try JSONDecoder().decode(PlaylistTracksResponse.self, from: data)
+
+                let tracks = tracksResponse.items.enumerated().compactMap { (index, item) -> SpotifyManager.Track? in
+                    guard let track = item.track else { return nil }
+                    // Create a unique ID combining track ID and its position to handle duplicates
+                    let uniqueId = "\(track.id)_\(allTracks.count + index)"
+                    return SpotifyManager.Track(
+                        id: uniqueId,
+                        trackId: track.id,
+                        name: track.name,
+                        artist: track.artists.map { $0.name }.joined(separator: ", "),
+                        album: track.album.name,
+                        releaseDate: formatReleaseDate(track.album.release_date),
+                        duration: formatDuration(track.duration_ms),
+                        uri: track.uri
+                    )
+                }
+
+                allTracks.append(contentsOf: tracks)
+
+                // Report progress
+                progressHandler?(allTracks.count, tracksResponse.total ?? allTracks.count)
+
+                // Check if there are more tracks to fetch
+                hasMore = tracksResponse.next != nil
+                offset += limit
+
+                print("Fetched \(allTracks.count) tracks so far...")
+
+            } catch {
+                print("Error fetching playlist tracks at offset \(offset): \(error)")
+                break
+            }
+        }
+
+        print("Total tracks fetched: \(allTracks.count)")
+        return allTracks
+    }
+
+    private func formatDuration(_ milliseconds: Int) -> String {
+        let seconds = milliseconds / 1000
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+
+    private func formatReleaseDate(_ dateString: String?) -> String {
+        guard let dateString = dateString else { return "" }
+
+        // Spotify returns dates in different formats:
+        // - Full date: "2023-10-15"
+        // - Year and month: "2023-10"
+        // - Year only: "2023"
+
+        let components = dateString.split(separator: "-")
+
+        if components.count == 3 {
+            // Full date - format as MMM d, yyyy
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+
+            if let date = dateFormatter.date(from: dateString) {
+                dateFormatter.dateFormat = "MMM d, yyyy"
+                return dateFormatter.string(from: date)
+            }
+        } else if components.count == 2 {
+            // Year and month - format as MMM yyyy
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM"
+
+            if let date = dateFormatter.date(from: dateString) {
+                dateFormatter.dateFormat = "MMM yyyy"
+                return dateFormatter.string(from: date)
+            }
+        } else if components.count == 1 {
+            // Year only
+            return dateString
+        }
+
+        return dateString
+    }
+
+    func deletePlaylistTracks(playlistId: String, trackUris: [String], positions: [[Int]]) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+        guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/tracks") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Create the tracks array with URIs and their positions
+        var tracks: [[String: Any]] = []
+        for (index, uri) in trackUris.enumerated() {
+            if index < positions.count {
+                tracks.append([
+                    "uri": uri,
+                    "positions": positions[index]
+                ])
+            }
+        }
+
+        let body = ["tracks": tracks]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    // Token expired, try to refresh
+                    if await refreshAccessToken() {
+                        return await deletePlaylistTracks(playlistId: playlistId, trackUris: trackUris, positions: positions)
+                    } else {
+                        logout()
+                        return false
+                    }
+                } else if httpResponse.statusCode == 200 {
+                    print("Successfully deleted tracks from playlist")
+                    return true
+                } else {
+                    print("Failed to delete tracks: HTTP \(httpResponse.statusCode)")
+                    return false
+                }
+            }
+        } catch {
+            print("Error deleting tracks from playlist: \(error)")
+            return false
+        }
+
+        return false
+    }
+
+    func replacePlaylistTracks(playlistId: String, trackUris: [String]) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+
+        // Spotify limits to 100 tracks per request, so we need to batch
+        let chunks = trackUris.chunked(into: 100)
+
+        for (index, chunk) in chunks.enumerated() {
+            // First chunk replaces all, subsequent chunks append
+            let endpoint = index == 0 ? "tracks" : "tracks"
+            let method = index == 0 ? "PUT" : "POST"
+
+            guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/\(endpoint)") else { return false }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = method
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            let body = ["uris": chunk]
+
+            do {
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (_, response) = try await URLSession.shared.data(for: request)
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    if httpResponse.statusCode == 401 {
+                        // Token expired, try to refresh
+                        if await refreshAccessToken() {
+                            return await replacePlaylistTracks(playlistId: playlistId, trackUris: trackUris)
+                        } else {
+                            logout()
+                            return false
+                        }
+                    } else if httpResponse.statusCode != 200 && httpResponse.statusCode != 201 {
+                        print("Failed to update playlist: HTTP \(httpResponse.statusCode)")
+                        return false
+                    }
+                }
+            } catch {
+                print("Error updating playlist: \(error)")
+                return false
+            }
+        }
+
+        return true
+    }
+
     func logout() {
         accessToken = nil
         refreshToken = nil
@@ -297,4 +526,40 @@ struct Owner: Codable {
 
 struct Tracks: Codable {
     let total: Int
+}
+
+struct PlaylistTracksResponse: Codable {
+    let items: [PlaylistTrackItem]
+    let total: Int?
+    let next: String?
+}
+
+struct PlaylistTrackItem: Codable {
+    let track: TrackObject?
+}
+
+struct TrackObject: Codable {
+    let id: String
+    let name: String
+    let artists: [Artist]
+    let album: Album
+    let duration_ms: Int
+    let uri: String
+}
+
+struct Artist: Codable {
+    let name: String
+}
+
+struct Album: Codable {
+    let name: String
+    let release_date: String?
+}
+
+extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
 }
