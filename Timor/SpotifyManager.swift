@@ -346,25 +346,30 @@ class SpotifyManager: ObservableObject {
     }
 
     func shuffleAndSavePlaylist(_ playlistId: String) async -> Bool {
+        print("shuffleAndSavePlaylist called for playlist: \(playlistId)")
+
         // Cancel any existing shuffle operation
         shuffleTask?.cancel()
 
-        // Prevent concurrent shuffle operations
-        guard !isShuffling else {
-            print("Shuffle already in progress, ignoring request")
+        // Check and set shuffling state
+        let canProceed = await MainActor.run {
+            if self.isShuffling {
+                print("Shuffle already in progress, ignoring request")
+                return false
+            }
+            self.isShuffling = true
+            print("Setting isShuffling to true")
+            return true
+        }
+
+        guard canProceed else {
             return false
         }
 
-        await MainActor.run {
-            self.isShuffling = true
-        }
-
         // Create new shuffle task
-        let task = Task<Bool, Never> {
+        let task = Task<Bool, Never> { @MainActor in
             defer {
-                Task { @MainActor in
-                    self.isShuffling = false
-                }
+                self.isShuffling = false
             }
 
             // Store original tracks in case we need to revert
@@ -379,6 +384,7 @@ class SpotifyManager: ObservableObject {
 
             // Shuffle the tracks
             let shuffledTracks = originalTracks.shuffled()
+            print("Shuffled \(originalCount) tracks")
 
             // Verify we didn't lose tracks
             guard shuffledTracks.count == originalCount else {
@@ -394,9 +400,7 @@ class SpotifyManager: ObservableObject {
             }
 
             // Update our local copy IMMEDIATELY for responsive UI
-            await MainActor.run {
-                self.currentPlaylistTracks = shuffledTracks
-            }
+            self.currentPlaylistTracks = shuffledTracks
 
             // Update the playlist on Spotify
             let success = await SpotifyWebAPI.shared.replacePlaylistTracks(
@@ -409,15 +413,13 @@ class SpotifyManager: ObservableObject {
                 await cachePlaylistTracks(playlistId: playlistId, tracks: shuffledTracks)
 
                 // Final verification
-                let finalCount = await MainActor.run { self.currentPlaylistTracks.count }
+                let finalCount = self.currentPlaylistTracks.count
                 if finalCount != originalCount {
                     print("WARNING: Track count changed after shuffle! Expected: \(originalCount), Got: \(finalCount)")
                 }
             } else {
                 // Revert to original tracks if failed
-                await MainActor.run {
-                    self.currentPlaylistTracks = originalTracks
-                }
+                self.currentPlaylistTracks = originalTracks
             }
 
             return success
