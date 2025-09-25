@@ -213,8 +213,13 @@ class SpotifyManager: ObservableObject {
             if let existing = cachedPlaylists.first {
                 // Update existing playlist
                 cachedPlaylist = existing
-                // Clear old tracks
-                cachedPlaylist.tracks?.removeAll()
+                // Delete old tracks properly
+                if let oldTracks = cachedPlaylist.tracks {
+                    for track in oldTracks {
+                        modelContext.delete(track)
+                    }
+                }
+                cachedPlaylist.tracks = []
             } else {
                 // Create new cached playlist
                 let playlist = playlists.first { $0.id == playlistId }
@@ -316,20 +321,26 @@ class SpotifyManager: ObservableObject {
         let shuffledTracks = currentPlaylistTracks.shuffled()
         let trackUris = shuffledTracks.map { $0.uri }
 
-        // Update the playlist
+        // Update our local copy IMMEDIATELY for responsive UI
+        await MainActor.run {
+            self.currentPlaylistTracks = shuffledTracks
+        }
+
+        // Update the playlist on Spotify
         let success = await SpotifyWebAPI.shared.replacePlaylistTracks(
             playlistId: playlistId,
             trackUris: trackUris
         )
 
         if success {
-            // Update our local copy to match
-            await MainActor.run {
-                self.currentPlaylistTracks = shuffledTracks
-            }
-
             // Update the cache with shuffled order
             await cachePlaylistTracks(playlistId: playlistId, tracks: shuffledTracks)
+        } else {
+            // Revert if failed
+            await MainActor.run {
+                // Fetch the original order again
+                self.fetchTracksForPlaylist(playlistId)
+            }
         }
 
         return success

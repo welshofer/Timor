@@ -155,8 +155,8 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        // Use List instead of Table to avoid crashes
-                        List(filteredTracks, selection: $selectedTracks) { track in
+                        // Force List recreation when search changes to avoid crashes
+                        List(filteredTracks, id: \.id, selection: $selectedTracks) { track in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(track.name)
@@ -189,9 +189,14 @@ struct ContentView: View {
                             .padding(.vertical, 2)
                         }
                         .listStyle(.inset)
+                        .id("\(playlist.id)-\(searchText)") // Force recreation on search change
                     }
                 }
                 .searchable(text: $searchText, prompt: "Search tracks")
+                .onChange(of: searchText) { _ in
+                    // Clear selection when search changes to prevent crash
+                    selectedTracks.removeAll()
+                }
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
                         Button {
