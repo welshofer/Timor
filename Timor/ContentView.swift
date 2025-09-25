@@ -244,7 +244,7 @@ struct ContentView: View {
                     selectedTracks.removeAll()
                 }
                 .toolbar {
-                    ToolbarItemGroup(placement: .primaryAction) {
+                    ToolbarItem(placement: .primaryAction) {
                         Button {
                             searchText = ""
                             spotifyManager.fetchTracksForPlaylist(playlist.id)
@@ -253,28 +253,30 @@ struct ContentView: View {
                         }
                         .disabled(spotifyManager.isLoadingTracks)
                         .help("Refresh playlist tracks")
+                    }
 
-                        if !spotifyManager.currentPlaylistTracks.isEmpty {
-                            Divider()
-
-                            if !selectedTracks.isEmpty {
-                                Button {
-                                    showDeleteConfirmation = true
-                                } label: {
-                                    Label("Delete \(selectedTracks.count)", systemImage: "trash")
-                                }
-                                .help("Delete selected tracks from playlist")
-
-                                Divider()
+                    if !selectedTracks.isEmpty {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button {
+                                showDeleteConfirmation = true
+                            } label: {
+                                Label("Delete \(selectedTracks.count)", systemImage: "trash")
                             }
+                            .help("Delete selected tracks from playlist")
+                        }
+                    }
 
+                    if !spotifyManager.currentPlaylistTracks.isEmpty {
+                        ToolbarItem(placement: .primaryAction) {
                             Button {
                                 spotifyManager.exportPlaylistToCSV(playlistName: playlist.name)
                             } label: {
                                 Label("Export", systemImage: "square.and.arrow.down")
                             }
                             .help("Export playlist to CSV file")
+                        }
 
+                        ToolbarItem(placement: .primaryAction) {
                             Button {
                                 Task {
                                     shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
