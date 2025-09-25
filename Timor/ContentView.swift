@@ -14,7 +14,6 @@ struct ContentView: View {
     @StateObject private var spotifyManager = SpotifyManager.shared
     @State private var showingSettings = false
     @State private var selectedPlaylist: SpotifyManager.Playlist?
-    @State private var isShuffling = false
     @State private var showShuffleAlert = false
     @State private var shuffleResult = false
     @State private var searchText = ""
@@ -231,15 +230,13 @@ struct ContentView: View {
 
                             Button {
                                 Task {
-                                    isShuffling = true
                                     shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
-                                    isShuffling = false
                                     showShuffleAlert = true
                                 }
                             } label: {
                                 Label("Shuffle", systemImage: "shuffle")
                             }
-                            .disabled(isShuffling || spotifyManager.isLoadingTracks)
+                            .disabled(spotifyManager.isShuffling || spotifyManager.isLoadingTracks)
                             .help("Shuffle and save playlist order")
                         }
                     }

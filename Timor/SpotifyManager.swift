@@ -23,10 +23,12 @@ class SpotifyManager: ObservableObject {
     @Published var currentPlaylistTracks: [Track] = []
     @Published var isLoadingTracks = false
     @Published var loadingProgress: (current: Int, total: Int) = (0, 0)
+    @Published var isShuffling = false
 
     private let keychain = KeychainManager.shared
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
+    private var shuffleTask: Task<Bool, Never>?
 
     struct Playlist: Identifiable {
         let id: String
@@ -201,6 +203,13 @@ class SpotifyManager: ObservableObject {
     private func cachePlaylistTracks(playlistId: String, tracks: [Track]) async {
         guard let modelContext = modelContext else { return }
 
+        // Important: Verify track count before caching
+        let trackCount = tracks.count
+        guard trackCount > 0 else {
+            print("WARNING: Attempting to cache empty track list, aborting")
+            return
+        }
+
         // Find or create the cached playlist
         let descriptor = FetchDescriptor<CachedPlaylist>(
             predicate: #Predicate { $0.playlistId == playlistId }
@@ -213,8 +222,10 @@ class SpotifyManager: ObservableObject {
             if let existing = cachedPlaylists.first {
                 // Update existing playlist
                 cachedPlaylist = existing
-                // Delete old tracks properly
+
+                // Delete old tracks properly in batch
                 if let oldTracks = cachedPlaylist.tracks {
+                    print("Deleting \(oldTracks.count) old cached tracks for playlist update")
                     for track in oldTracks {
                         modelContext.delete(track)
                     }
@@ -227,12 +238,13 @@ class SpotifyManager: ObservableObject {
                     playlistId: playlistId,
                     name: playlist?.name ?? "",
                     owner: playlist?.owner ?? "",
-                    totalTracks: tracks.count
+                    totalTracks: trackCount
                 )
                 modelContext.insert(cachedPlaylist)
             }
 
-            // Add tracks to cache
+            // Create all new cached tracks
+            var newTracks: [CachedTrack] = []
             for (index, track) in tracks.enumerated() {
                 let cachedTrack = CachedTrack(
                     trackId: track.trackId,
@@ -247,12 +259,29 @@ class SpotifyManager: ObservableObject {
                 )
                 cachedTrack.playlist = cachedPlaylist
                 modelContext.insert(cachedTrack)
+                newTracks.append(cachedTrack)
             }
 
+            cachedPlaylist.tracks = newTracks
             cachedPlaylist.lastSynced = Date()
-            cachedPlaylist.totalTracks = tracks.count
+            cachedPlaylist.totalTracks = trackCount
 
+            // Save atomically
             try modelContext.save()
+            print("Successfully cached \(trackCount) tracks for playlist \(playlistId)")
+
+            // Verify the save was successful
+            let verifyDescriptor = FetchDescriptor<CachedPlaylist>(
+                predicate: #Predicate { $0.playlistId == playlistId }
+            )
+            let verifyResult = try modelContext.fetch(verifyDescriptor)
+            if let savedPlaylist = verifyResult.first,
+               let savedTracks = savedPlaylist.tracks {
+                print("Verified: \(savedTracks.count) tracks saved in cache")
+                if savedTracks.count != trackCount {
+                    print("ERROR: Track count mismatch after save! Expected: \(trackCount), Got: \(savedTracks.count)")
+                }
+            }
         } catch {
             print("Failed to cache playlist tracks: \(error)")
         }
@@ -317,33 +346,85 @@ class SpotifyManager: ObservableObject {
     }
 
     func shuffleAndSavePlaylist(_ playlistId: String) async -> Bool {
-        // Shuffle the tracks
-        let shuffledTracks = currentPlaylistTracks.shuffled()
-        let trackUris = shuffledTracks.map { $0.uri }
+        // Cancel any existing shuffle operation
+        shuffleTask?.cancel()
 
-        // Update our local copy IMMEDIATELY for responsive UI
+        // Prevent concurrent shuffle operations
+        guard !isShuffling else {
+            print("Shuffle already in progress, ignoring request")
+            return false
+        }
+
         await MainActor.run {
-            self.currentPlaylistTracks = shuffledTracks
+            self.isShuffling = true
         }
 
-        // Update the playlist on Spotify
-        let success = await SpotifyWebAPI.shared.replacePlaylistTracks(
-            playlistId: playlistId,
-            trackUris: trackUris
-        )
-
-        if success {
-            // Update the cache with shuffled order
-            await cachePlaylistTracks(playlistId: playlistId, tracks: shuffledTracks)
-        } else {
-            // Revert if failed
-            await MainActor.run {
-                // Fetch the original order again
-                self.fetchTracksForPlaylist(playlistId)
+        // Create new shuffle task
+        let task = Task<Bool, Never> {
+            defer {
+                Task { @MainActor in
+                    self.isShuffling = false
+                }
             }
+
+            // Store original tracks in case we need to revert
+            let originalTracks = currentPlaylistTracks
+            let originalCount = originalTracks.count
+
+            // Ensure we have tracks to shuffle
+            guard !originalTracks.isEmpty else {
+                print("No tracks to shuffle")
+                return false
+            }
+
+            // Shuffle the tracks
+            let shuffledTracks = originalTracks.shuffled()
+
+            // Verify we didn't lose tracks
+            guard shuffledTracks.count == originalCount else {
+                print("Track count mismatch during shuffle! Original: \(originalCount), Shuffled: \(shuffledTracks.count)")
+                return false
+            }
+
+            let trackUris = shuffledTracks.map { $0.uri }
+
+            // Check for cancellation
+            if Task.isCancelled {
+                return false
+            }
+
+            // Update our local copy IMMEDIATELY for responsive UI
+            await MainActor.run {
+                self.currentPlaylistTracks = shuffledTracks
+            }
+
+            // Update the playlist on Spotify
+            let success = await SpotifyWebAPI.shared.replacePlaylistTracks(
+                playlistId: playlistId,
+                trackUris: trackUris
+            )
+
+            if success {
+                // Update the cache with shuffled order
+                await cachePlaylistTracks(playlistId: playlistId, tracks: shuffledTracks)
+
+                // Final verification
+                let finalCount = await MainActor.run { self.currentPlaylistTracks.count }
+                if finalCount != originalCount {
+                    print("WARNING: Track count changed after shuffle! Expected: \(originalCount), Got: \(finalCount)")
+                }
+            } else {
+                // Revert to original tracks if failed
+                await MainActor.run {
+                    self.currentPlaylistTracks = originalTracks
+                }
+            }
+
+            return success
         }
 
-        return success
+        shuffleTask = task
+        return await task.value
     }
 
     func exportPlaylistToCSV(playlistName: String) {
