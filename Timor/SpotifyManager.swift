@@ -429,6 +429,42 @@ class SpotifyManager: ObservableObject {
         return await task.value
     }
 
+    func reorderTracks(in playlistId: String, from source: IndexSet, to destination: Int) async {
+        // Convert indices to track positions
+        var tracks = currentPlaylistTracks
+
+        // Perform the move locally first for immediate UI feedback
+        tracks.move(fromOffsets: source, toOffset: destination)
+
+        await MainActor.run {
+            self.currentPlaylistTracks = tracks
+        }
+
+        // Calculate the API parameters
+        // source contains the original indices, destination is where they should go
+        guard let firstIndex = source.first else { return }
+        let rangeLength = source.count
+
+        // Adjust destination index based on move direction
+        let insertBefore = destination > firstIndex ? destination - rangeLength : destination
+
+        // Call Spotify API to persist the change
+        let success = await SpotifyWebAPI.shared.reorderPlaylistTracks(
+            playlistId: playlistId,
+            rangeStart: firstIndex,
+            insertBefore: insertBefore,
+            rangeLength: rangeLength
+        )
+
+        if success {
+            // Update cache with new order
+            await cachePlaylistTracks(playlistId: playlistId, tracks: tracks)
+        } else {
+            // Revert on failure
+            await fetchTracksForPlaylist(playlistId)
+        }
+    }
+
     func exportPlaylistToCSV(playlistName: String) {
         // Ensure we're on the main thread for UI operations
         guard Thread.isMainThread else {

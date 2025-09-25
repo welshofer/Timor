@@ -155,40 +155,89 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         // Force List recreation when search changes to avoid crashes
-                        List(filteredTracks, id: \.id, selection: $selectedTracks) { track in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(track.name)
-                                        .font(.system(size: 13))
-                                        .lineLimit(1)
-                                    Text(track.artist)
+                        if searchText.isEmpty {
+                            // Allow reordering only when not searching
+                            List(selection: $selectedTracks) {
+                                ForEach(spotifyManager.currentPlaylistTracks, id: \.id) { track in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(track.name)
+                                                .font(.system(size: 13))
+                                                .lineLimit(1)
+                                            Text(track.artist)
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(1)
+                                        }
+
+                                        Spacer()
+
+                                        Text(track.album)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                            .frame(maxWidth: 200, alignment: .leading)
+
+                                        Text(track.releaseDate)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 80, alignment: .trailing)
+
+                                        Text(track.duration)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 50, alignment: .trailing)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                                .onMove { source, destination in
+                                    Task {
+                                        await spotifyManager.reorderTracks(
+                                            in: playlist.id,
+                                            from: source,
+                                            to: destination
+                                        )
+                                    }
+                                }
+                            }
+                            .listStyle(.inset)
+                        } else {
+                            // No reordering while searching
+                            List(filteredTracks, id: \.id, selection: $selectedTracks) { track in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.name)
+                                            .font(.system(size: 13))
+                                            .lineLimit(1)
+                                        Text(track.artist)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer()
+
+                                    Text(track.album)
                                         .font(.system(size: 11))
                                         .foregroundColor(.secondary)
                                         .lineLimit(1)
+                                        .frame(maxWidth: 200, alignment: .leading)
+
+                                    Text(track.releaseDate)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 80, alignment: .trailing)
+
+                                    Text(track.duration)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 50, alignment: .trailing)
                                 }
-
-                                Spacer()
-
-                                Text(track.album)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: 200, alignment: .leading)
-
-                                Text(track.releaseDate)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 80, alignment: .trailing)
-
-                                Text(track.duration)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 50, alignment: .trailing)
+                                .padding(.vertical, 2)
                             }
-                            .padding(.vertical, 2)
+                            .listStyle(.inset)
+                            .id("\(playlist.id)-\(searchText)") // Force recreation on search change
                         }
-                        .listStyle(.inset)
-                        .id("\(playlist.id)-\(searchText)") // Force recreation on search change
                     }
                 }
                 .searchable(text: $searchText, prompt: "Search tracks")

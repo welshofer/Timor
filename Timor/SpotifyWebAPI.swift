@@ -431,6 +431,49 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return false
     }
 
+    func reorderPlaylistTracks(playlistId: String, rangeStart: Int, insertBefore: Int, rangeLength: Int = 1) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+        guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/tracks") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "range_start": rangeStart,
+            "insert_before": insertBefore,
+            "range_length": rangeLength
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    // Token expired, try to refresh
+                    if await refreshAccessToken() {
+                        return await reorderPlaylistTracks(playlistId: playlistId, rangeStart: rangeStart, insertBefore: insertBefore, rangeLength: rangeLength)
+                    } else {
+                        logout()
+                        return false
+                    }
+                } else if httpResponse.statusCode == 200 {
+                    return true
+                } else {
+                    print("Failed to reorder tracks: HTTP \(httpResponse.statusCode)")
+                    return false
+                }
+            }
+        } catch {
+            print("Error reordering playlist tracks: \(error)")
+            return false
+        }
+
+        return false
+    }
+
     func replacePlaylistTracks(playlistId: String, trackUris: [String]) async -> Bool {
         guard let accessToken = accessToken else { return false }
 
