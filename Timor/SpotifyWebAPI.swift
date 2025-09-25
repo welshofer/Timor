@@ -412,16 +412,16 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 100) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
-        // Build search query
+        // Build search query - use looser matching without quotes for better results
         var queryParts: [String] = []
         if !title.isEmpty {
-            queryParts.append("track:\"\(title)\"")
+            queryParts.append("track:\(title)")
         }
         if !artist.isEmpty {
-            queryParts.append("artist:\"\(artist)\"")
+            queryParts.append("artist:\(artist)")
         }
         if !album.isEmpty {
-            queryParts.append("album:\"\(album)\"")
+            queryParts.append("album:\(album)")
         }
         if !year.isEmpty {
             queryParts.append("year:\(year)")
@@ -435,6 +435,9 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         let query = queryParts.joined(separator: " ")
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
         guard let url = URL(string: "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)") else { return [] }
+
+        print("Search query: \(query)")
+        print("Search URL: \(url)")
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -451,11 +454,20 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 }
             }
 
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let tracks = json["tracks"] as? [String: Any],
-               let items = tracks["items"] as? [[String: Any]] {
+            // Try to parse the response
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                print("Search response: \(json.keys)")
 
-                return items.compactMap { item in
+                if let error = json["error"] as? [String: Any] {
+                    print("Search error: \(error)")
+                    return []
+                }
+
+                if let tracks = json["tracks"] as? [String: Any],
+                   let items = tracks["items"] as? [[String: Any]] {
+                    print("Found \(items.count) tracks")
+
+                    return items.compactMap { item in
                     guard let id = item["id"] as? String,
                           let name = item["name"] as? String,
                           let uri = item["uri"] as? String,
@@ -482,7 +494,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         duration: duration,
                         uri: uri
                     )
+                    }
                 }
+            } else {
+                print("Failed to parse search response")
             }
         } catch {
             print("Error searching tracks: \(error)")
