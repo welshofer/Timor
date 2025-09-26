@@ -197,7 +197,8 @@ struct PlaylistToolbar: ToolbarContent {
     var body: some ToolbarContent {
         // Main action buttons group
         ToolbarItemGroup(placement: .primaryAction) {
-            ControlGroup {
+
+            ControlGroup{
                 if let playlist = selectedPlaylist, playlist.isEditable {
                     Button {
                         showTrackSearch = true
@@ -206,7 +207,19 @@ struct PlaylistToolbar: ToolbarContent {
                     }
                     .help("Search and add tracks to this playlist")
                 }
-
+                if selectedPlaylist?.isEditable ?? false {
+                    Button {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Label(selectedTracks.isEmpty ? "Delete" : "Delete \(selectedTracks.count)", systemImage: "trash")
+                    }
+                    .disabled(selectedTracks.isEmpty)
+                    .help(selectedTracks.isEmpty ? "Select tracks to delete" : "Delete selected tracks from playlist")
+                }
+            }
+            .controlGroupStyle(.navigation)
+            
+            ControlGroup {
                 Button {
                     searchText = ""
                     selectedTrack = nil
@@ -222,15 +235,6 @@ struct PlaylistToolbar: ToolbarContent {
                 }
                 .disabled(spotifyManager.isLoadingTracks)
                 .help("Refresh tracks from Spotify")
-
-                if !selectedTracks.isEmpty && (selectedPlaylist?.isEditable ?? false) {
-                    Button {
-                        showDeleteConfirmation = true
-                    } label: {
-                        Label("Delete \(selectedTracks.count)", systemImage: "trash")
-                    }
-                    .help("Delete selected tracks from playlist")
-                }
 
                 if !spotifyManager.currentPlaylistTracks.isEmpty {
                     Button {
