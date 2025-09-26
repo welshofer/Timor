@@ -28,6 +28,8 @@ class SpotifyManager: ObservableObject {
     @Published var isLoadingTracks = false
     @Published var loadingProgress: (current: Int, total: Int) = (0, 0)
     @Published var isShuffling = false
+    @Published var selectedPlaylist: Playlist?
+    @Published var isViewingLikedSongs = false
 
     private let keychain = KeychainManager.shared
     private var modelContainer: ModelContainer?
@@ -51,6 +53,7 @@ class SpotifyManager: ObservableObject {
         let releaseDate: String
         let duration: String
         let uri: String
+        var isLiked: Bool = false
 
         static var transferRepresentation: some TransferRepresentation {
             CodableRepresentation(contentType: .spotifyTrack)
@@ -86,13 +89,13 @@ class SpotifyManager: ObservableObject {
     private func setupWebAPIObserver() {
         // Check initial authentication state
         Task {
-            await updateAuthenticationState()
+            updateAuthenticationState()
         }
 
         // Monitor Web API authentication state changes
         Task {
             for await _ in NotificationCenter.default.notifications(named: .init("SpotifyWebAPIAuthChanged")) {
-                await updateAuthenticationState()
+                updateAuthenticationState()
             }
         }
     }
@@ -146,6 +149,28 @@ class SpotifyManager: ObservableObject {
         }
     }
 
+    func createPlaylist(name: String, description: String = "") async -> Bool {
+        let playlistId = await SpotifyWebAPI.shared.createPlaylist(name: name, description: description, isPublic: false)
+
+        if playlistId != nil {
+            // Refresh playlists to show the new one
+            fetchPlaylists()
+            return true
+        }
+        return false
+    }
+
+    func deletePlaylist(_ playlistId: String) async -> Bool {
+        let success = await SpotifyWebAPI.shared.deletePlaylist(playlistId: playlistId)
+        if success {
+            // Remove from local list
+            await MainActor.run {
+                self.playlists.removeAll { $0.id == playlistId }
+            }
+        }
+        return success
+    }
+
     func updatePlaylistTrackCount(_ playlistId: String, addedCount: Int) {
         // Update the track count for the playlist in our local list
         if let index = playlists.firstIndex(where: { $0.id == playlistId }) {
@@ -161,28 +186,250 @@ class SpotifyManager: ObservableObject {
         }
     }
 
+    func likeTrack(_ track: Track) async -> Bool {
+        print("Attempting to like track: \(track.name) (ID: \(track.trackId))")
+        let success = await SpotifyWebAPI.shared.saveTracks(trackIds: [track.trackId])
+        if success {
+            print("Successfully liked track: \(track.name)")
+            // Update the local track's liked status
+            await MainActor.run {
+                if let index = self.currentPlaylistTracks.firstIndex(where: { $0.id == track.id }) {
+                    self.currentPlaylistTracks[index].isLiked = true
+                }
+            }
+
+            // Don't auto-refresh Liked Songs to avoid overwriting cache
+        } else {
+            print("Failed to like track: \(track.name)")
+        }
+        return success
+    }
+
+    func unlikeTrack(_ track: Track) async -> Bool {
+        let success = await SpotifyWebAPI.shared.removeSavedTracks(trackIds: [track.trackId])
+        if success {
+            // Update the local track's liked status
+            await MainActor.run {
+                if let index = self.currentPlaylistTracks.firstIndex(where: { $0.id == track.id }) {
+                    self.currentPlaylistTracks[index].isLiked = false
+                }
+            }
+
+            // If viewing Liked Songs, just remove from current list
+            if isViewingLikedSongs {
+                await MainActor.run {
+                    self.currentPlaylistTracks.removeAll { $0.trackId == track.trackId }
+                }
+            }
+        }
+        return success
+    }
+
+    func checkTracksLikedStatus() async {
+        // Capture a snapshot of tracks to avoid range errors if the array changes
+        let tracksSnapshot = currentPlaylistTracks
+        guard !tracksSnapshot.isEmpty else { return }
+
+        // Check all tracks in batches of 50 (Spotify API limit)
+        for startIndex in stride(from: 0, to: tracksSnapshot.count, by: 50) {
+            let endIndex = min(startIndex + 50, tracksSnapshot.count)
+            let batch = Array(tracksSnapshot[startIndex..<endIndex])
+            let trackIds = batch.map { $0.trackId }
+
+            let likedStatuses = await SpotifyWebAPI.shared.checkSavedTracks(trackIds: trackIds)
+
+            // Update the liked status for this batch
+            await MainActor.run {
+                for (batchIndex, isLiked) in likedStatuses.enumerated() {
+                    let trackIndex = startIndex + batchIndex
+                    // Find the track by ID to update it, in case the array order changed
+                    if trackIndex < tracksSnapshot.count {
+                        let trackToUpdate = tracksSnapshot[trackIndex]
+                        if let currentIndex = self.currentPlaylistTracks.firstIndex(where: { $0.id == trackToUpdate.id }) {
+                            self.currentPlaylistTracks[currentIndex].isLiked = isLiked
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func fetchLikedSongs() {
+        print("Starting to fetch liked songs...")
+        Task {
+            // First, try to load from cache
+            if let cachedTracks = loadLikedSongsFromCache() {
+                print("Loaded \(cachedTracks.count) liked songs from cache")
+                await MainActor.run {
+                    self.currentPlaylistTracks = cachedTracks
+                }
+
+                // Still fetch from API to check for updates
+                await fetchAndUpdateLikedSongs()
+            } else {
+                // No cache, show loading and fetch
+                isLoadingTracks = true
+                loadingProgress = (0, 0)
+                currentPlaylistTracks = []
+                await fetchAndUpdateLikedSongs()
+            }
+        }
+    }
+
+    private func fetchAndUpdateLikedSongs() async {
+        var allTracks: [Track] = []
+        var offset = 0
+        let limit = 50
+        var hasMore = true
+
+        while hasMore {
+            print("Fetching batch at offset \(offset)...")
+            let result = await SpotifyWebAPI.shared.fetchLikedSongs(limit: limit, offset: offset)
+            print("Got \(result.tracks.count) tracks in this batch")
+            allTracks.append(contentsOf: result.tracks)
+
+            // Update progress
+            await MainActor.run {
+                self.loadingProgress = (allTracks.count, result.total)
+            }
+
+            hasMore = allTracks.count < result.total && !result.tracks.isEmpty
+            offset += limit
+        }
+
+        print("Finished fetching liked songs. Total: \(allTracks.count)")
+
+        // Only cache if we got tracks (prevent overwriting with empty data)
+        if !allTracks.isEmpty {
+            cacheLikedSongs(allTracks)
+        } else {
+            print("WARNING: Received 0 liked songs from API - not updating cache")
+        }
+
+        await MainActor.run {
+            self.currentPlaylistTracks = allTracks
+            self.isLoadingTracks = false
+        }
+    }
+
+    private func loadLikedSongsFromCache() -> [Track]? {
+        guard let modelContext = modelContext else { return nil }
+
+        let descriptor = FetchDescriptor<CachedPlaylist>(
+            predicate: #Predicate { playlist in
+                playlist.playlistId == "LIKED_SONGS"
+            }
+        )
+
+        do {
+            let cachedPlaylists = try modelContext.fetch(descriptor)
+            guard let cached = cachedPlaylists.first,
+                  let tracks = cached.tracks else {
+                return nil
+            }
+
+            // Convert cached tracks to Track objects
+            let sortedTracks = tracks.sorted { $0.position < $1.position }
+            return sortedTracks.map { $0.toTrack() }
+        } catch {
+            print("Error loading liked songs from cache: \(error)")
+            return nil
+        }
+    }
+
+    private func cacheLikedSongs(_ tracks: [Track]) {
+        guard let modelContext = modelContext else { return }
+
+        let descriptor = FetchDescriptor<CachedPlaylist>(
+            predicate: #Predicate { playlist in
+                playlist.playlistId == "LIKED_SONGS"
+            }
+        )
+
+        do {
+            // Delete old cached liked songs
+            let existing = try modelContext.fetch(descriptor)
+            for cached in existing {
+                if let tracks = cached.tracks {
+                    for track in tracks {
+                        modelContext.delete(track)
+                    }
+                }
+                modelContext.delete(cached)
+            }
+
+            // Create new cached playlist for liked songs
+            let cachedPlaylist = CachedPlaylist(
+                playlistId: "LIKED_SONGS",
+                name: "Liked Songs",
+                owner: "You",
+                totalTracks: tracks.count
+            )
+
+            // Create cached tracks
+            let cachedTracks = tracks.enumerated().map { index, track in
+                CachedTrack(
+                    trackId: track.trackId,
+                    uniqueId: track.id,
+                    name: track.name,
+                    artist: track.artist,
+                    album: track.album,
+                    releaseDate: track.releaseDate,
+                    duration: track.duration,
+                    uri: track.uri,
+                    position: index
+                )
+            }
+
+            cachedPlaylist.tracks = cachedTracks
+            for track in cachedTracks {
+                track.playlist = cachedPlaylist
+            }
+
+            modelContext.insert(cachedPlaylist)
+            try modelContext.save()
+
+            print("Successfully cached \(tracks.count) liked songs")
+        } catch {
+            print("Error caching liked songs: \(error)")
+        }
+    }
+
     func fetchTracksForPlaylist(_ playlistId: String) {
         Task {
+            // CRITICAL: Store the playlist ID we're fetching for validation
+            let targetPlaylistId = playlistId
+
             isLoadingTracks = true
             loadingProgress = (0, 0)
+            currentPlaylistTracks = []  // Always clear current tracks first
 
-            // First, try to load from cache
-            if let cachedTracks = await loadCachedTracks(for: playlistId) {
+            // First, try to load from cache WITH VALIDATION
+            if let cachedTracks = await loadCachedTracks(for: targetPlaylistId) {
+                // VALIDATE: Check we're still on the same playlist before using cache
+                guard selectedPlaylist?.id == targetPlaylistId else {
+                    print("Playlist changed during cache load, aborting cache use")
+                    return
+                }
+
                 await MainActor.run {
                     self.currentPlaylistTracks = cachedTracks
                     self.isLoadingTracks = false
                 }
 
-                // Fetch fresh data in background to check for updates
+                // Check liked status for visible tracks
+                Task {
+                    await self.checkTracksLikedStatus()
+                }
+
+                // Fetch fresh data in background WITH PROPER VALIDATION
                 Task.detached { [weak self] in
-                    await self?.syncPlaylistInBackground(playlistId)
+                    await self?.syncPlaylistInBackground(targetPlaylistId)
                 }
             } else {
                 // No cache, fetch from API
-                currentPlaylistTracks = []
-
                 let tracks = await SpotifyWebAPI.shared.fetchPlaylistTracks(
-                    playlistId: playlistId,
+                    playlistId: targetPlaylistId,
                     progressHandler: { current, total in
                         Task { @MainActor in
                             self.loadingProgress = (current, total)
@@ -190,19 +437,38 @@ class SpotifyManager: ObservableObject {
                     }
                 )
 
+                // VALIDATE: Check we're still on the same playlist before updating
+                guard await MainActor.run(body: { self.selectedPlaylist?.id == targetPlaylistId }) else {
+                    print("Playlist changed during API fetch, aborting update")
+                    return
+                }
+
                 await MainActor.run {
                     self.currentPlaylistTracks = tracks
                     self.isLoadingTracks = false
                 }
 
-                // Cache the fetched tracks
-                await cachePlaylistTracks(playlistId: playlistId, tracks: tracks)
+                // Check liked status for visible tracks
+                Task {
+                    await self.checkTracksLikedStatus()
+                }
+
+                // Cache ONLY if we're still on the same playlist
+                if selectedPlaylist?.id == targetPlaylistId {
+                    await cachePlaylistTracks(playlistId: targetPlaylistId, tracks: tracks)
+                }
             }
         }
     }
 
     private func loadCachedTracks(for playlistId: String) async -> [Track]? {
         guard let modelContext = modelContext else { return nil }
+
+        // CRITICAL: Verify we're still trying to load the right playlist
+        guard await MainActor.run(body: { self.selectedPlaylist?.id == playlistId }) else {
+            print("WARNING: Attempting to load cache for playlist \(playlistId) but selected playlist has changed")
+            return nil
+        }
 
         let descriptor = FetchDescriptor<CachedPlaylist>(
             predicate: #Predicate { $0.playlistId == playlistId }
@@ -212,6 +478,16 @@ class SpotifyManager: ObservableObject {
             let cachedPlaylists = try modelContext.fetch(descriptor)
             if let cachedPlaylist = cachedPlaylists.first,
                let tracks = cachedPlaylist.tracks {
+
+                // DOUBLE CHECK: Verify the playlist ID matches what we requested
+                guard cachedPlaylist.playlistId == playlistId else {
+                    print("CRITICAL ERROR: Cache returned wrong playlist! Requested: \(playlistId), Got: \(cachedPlaylist.playlistId)")
+                    return nil
+                }
+
+                // Log what we're loading for debugging
+                print("Loading \(tracks.count) cached tracks for playlist: \(cachedPlaylist.name) (ID: \(playlistId))")
+
                 // Return tracks sorted by position
                 return tracks
                     .sorted { $0.position < $1.position }
@@ -312,21 +588,49 @@ class SpotifyManager: ObservableObject {
     }
 
     private func syncPlaylistInBackground(_ playlistId: String) async {
+        // CRITICAL VALIDATION: Only sync if this is still the selected playlist
+        guard await MainActor.run(body: { self.selectedPlaylist?.id == playlistId }) else {
+            print("Background sync aborted: playlist \(playlistId) is no longer selected")
+            return
+        }
+
         // Fetch fresh data from API
         let freshTracks = await SpotifyWebAPI.shared.fetchPlaylistTracks(
             playlistId: playlistId,
             progressHandler: nil
         )
 
-        // Compare with current tracks (simple comparison by count and first/last track)
-        if freshTracks.count != currentPlaylistTracks.count ||
-           freshTracks.first?.id != currentPlaylistTracks.first?.id ||
-           freshTracks.last?.id != currentPlaylistTracks.last?.id {
-            // Playlist has changed, update UI and cache
-            await MainActor.run {
-                self.currentPlaylistTracks = freshTracks
+        // SECOND VALIDATION: Check again before updating anything
+        guard await MainActor.run(body: { self.selectedPlaylist?.id == playlistId }) else {
+            print("Background sync aborted after fetch: playlist changed")
+            return
+        }
+
+        // Compare with current tracks (but DON'T push changes to Spotify!)
+        let currentTracks = await MainActor.run { self.currentPlaylistTracks }
+        if freshTracks.count != currentTracks.count ||
+           freshTracks.first?.trackId != currentTracks.first?.trackId ||
+           freshTracks.last?.trackId != currentTracks.last?.trackId {
+
+            // Playlist has changed on Spotify, update our LOCAL view only
+            print("Playlist \(playlistId) has changed on Spotify, updating local view")
+
+            // FINAL VALIDATION before updating
+            guard await MainActor.run(body: { self.selectedPlaylist?.id == playlistId }) else {
+                print("Background sync aborted before UI update: playlist changed")
+                return
             }
-            await cachePlaylistTracks(playlistId: playlistId, tracks: freshTracks)
+
+            await MainActor.run {
+                // Only update if we're STILL on this playlist
+                if self.selectedPlaylist?.id == playlistId {
+                    self.currentPlaylistTracks = freshTracks
+                    // Update cache with fresh data from Spotify
+                    Task {
+                        await self.cachePlaylistTracks(playlistId: playlistId, tracks: freshTracks)
+                    }
+                }
+            }
         }
     }
 
@@ -364,7 +668,7 @@ class SpotifyManager: ObservableObject {
                 self.updatePlaylistTrackCount(playlistId, addedCount: -tracks.count)
             }
 
-            // Update the cache
+            // Update cache with the modified playlist
             await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
         }
 
@@ -373,6 +677,13 @@ class SpotifyManager: ObservableObject {
 
     func shuffleAndSavePlaylist(_ playlistId: String) async -> Bool {
         print("shuffleAndSavePlaylist called for playlist: \(playlistId)")
+
+        // CRITICAL SAFETY CHECK: Verify playlist ID matches selected playlist
+        guard let currentSelectedPlaylist = selectedPlaylist,
+              currentSelectedPlaylist.id == playlistId else {
+            print("ERROR: Playlist ID mismatch! Aborting shuffle to prevent overwrite.")
+            return false
+        }
 
         // Cancel any existing shuffle operation
         shuffleTask?.cancel()
@@ -398,6 +709,13 @@ class SpotifyManager: ObservableObject {
                 self.isShuffling = false
             }
 
+            // SECOND SAFETY CHECK: Verify we're still on the same playlist
+            guard let currentSelectedPlaylist = self.selectedPlaylist,
+                  currentSelectedPlaylist.id == playlistId else {
+                print("ERROR: Playlist changed during shuffle! Aborting.")
+                return false
+            }
+
             // Store original tracks in case we need to revert
             let originalTracks = currentPlaylistTracks
             let originalCount = originalTracks.count
@@ -408,9 +726,17 @@ class SpotifyManager: ObservableObject {
                 return false
             }
 
+            // VERIFY TRACK COUNT MATCHES PLAYLIST (skip for playlists we just modified)
+            // Allow some flexibility for recently modified playlists
+            let trackCountDifference = abs(originalCount - currentSelectedPlaylist.totalTracks)
+            if trackCountDifference > 10 && currentSelectedPlaylist.totalTracks > 0 {
+                print("WARNING: Large track count difference! Playlist reports \(currentSelectedPlaylist.totalTracks) but we have \(originalCount)")
+                // Don't abort - the local count is likely more accurate if we just added/deleted tracks
+            }
+
             // Shuffle the tracks
             let shuffledTracks = originalTracks.shuffled()
-            print("Shuffled \(originalCount) tracks")
+            print("Shuffled \(originalCount) tracks for playlist: \(currentSelectedPlaylist.name)")
 
             // Verify we didn't lose tracks
             guard shuffledTracks.count == originalCount else {
@@ -428,6 +754,13 @@ class SpotifyManager: ObservableObject {
             // Update our local copy IMMEDIATELY for responsive UI
             self.currentPlaylistTracks = shuffledTracks
 
+            // FINAL SAFETY CHECK before API call
+            guard self.selectedPlaylist?.id == playlistId else {
+                print("ERROR: Playlist changed before API call! Reverting local changes.")
+                self.currentPlaylistTracks = originalTracks
+                return false
+            }
+
             // Update the playlist on Spotify
             let success = await SpotifyWebAPI.shared.replacePlaylistTracks(
                 playlistId: playlistId,
@@ -435,8 +768,8 @@ class SpotifyManager: ObservableObject {
             )
 
             if success {
-                // Update the cache with shuffled order
-                await cachePlaylistTracks(playlistId: playlistId, tracks: shuffledTracks)
+                // Update cache with the modified playlist
+            await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
 
                 // Final verification
                 let finalCount = self.currentPlaylistTracks.count
@@ -483,8 +816,8 @@ class SpotifyManager: ObservableObject {
         )
 
         if success {
-            // Update cache with new order
-            await cachePlaylistTracks(playlistId: playlistId, tracks: tracks)
+            // Update cache with the modified playlist
+            await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
         } else {
             // Revert on failure
             await fetchTracksForPlaylist(playlistId)
@@ -492,13 +825,7 @@ class SpotifyManager: ObservableObject {
     }
 
     func exportPlaylistToCSV(playlistName: String) {
-        // Ensure we're on the main thread for UI operations
-        guard Thread.isMainThread else {
-            DispatchQueue.main.async {
-                self.exportPlaylistToCSV(playlistName: playlistName)
-            }
-            return
-        }
+        // This function is already @MainActor, no need for thread check
 
         // Show save panel
         let savePanel = NSSavePanel()
@@ -543,25 +870,21 @@ class SpotifyManager: ObservableObject {
                         print("Successfully exported playlist to: \(url.path)")
 
                         // Show success message
-                        await MainActor.run {
-                            let alert = NSAlert()
-                            alert.messageText = "Export Successful"
-                            alert.informativeText = "Playlist exported to: \(url.lastPathComponent)"
-                            alert.alertStyle = .informational
-                            alert.addButton(withTitle: "OK")
-                            alert.runModal()
-                        }
+                        let alert = NSAlert()
+                        alert.messageText = "Export Successful"
+                        alert.informativeText = "Playlist exported to: \(url.lastPathComponent)"
+                        alert.alertStyle = .informational
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
                     } catch {
                         print("Error exporting CSV: \(error)")
                         // Show error alert
-                        await MainActor.run {
-                            let alert = NSAlert()
-                            alert.messageText = "Export Failed"
-                            alert.informativeText = "Failed to export playlist: \(error.localizedDescription)"
-                            alert.alertStyle = .warning
-                            alert.addButton(withTitle: "OK")
-                            alert.runModal()
-                        }
+                        let alert = NSAlert()
+                        alert.messageText = "Export Failed"
+                        alert.informativeText = "Failed to export playlist: \(error.localizedDescription)"
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
                     }
                 }
             }

@@ -93,7 +93,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             return
         }
 
-        let scopes = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private"
+        let scopes = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private user-library-read user-library-modify"
         let state = UUID().uuidString
 
         var components = URLComponents(string: authURL)!
@@ -497,6 +497,280 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
 
         return []
+    }
+
+    func fetchLikedSongs(limit: Int = 50, offset: Int = 0) async -> (tracks: [SpotifyManager.Track], total: Int) {
+        guard let accessToken = accessToken else { return ([], 0) }
+        guard let url = URL(string: "\(baseURL)/me/tracks?limit=\(limit)&offset=\(offset)") else { return ([], 0) }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await fetchLikedSongs(limit: limit, offset: offset)
+                    } else {
+                        logout()
+                        return ([], 0)
+                    }
+                } else if httpResponse.statusCode == 200 {
+                    print("Fetching liked songs - offset: \(offset), limit: \(limit)")
+                    // Parse the response
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let items = json["items"] as? [[String: Any]],
+                       let total = json["total"] as? Int {
+
+                        print("Found \(items.count) liked songs, total: \(total)")
+
+                        let tracks = items.compactMap { item -> SpotifyManager.Track? in
+                            guard let track = item["track"] as? [String: Any],
+                                  let id = track["id"] as? String,
+                                  let name = track["name"] as? String,
+                                  let uri = track["uri"] as? String,
+                                  let artists = track["artists"] as? [[String: Any]],
+                                  let album = track["album"] as? [String: Any],
+                                  let albumName = album["name"] as? String,
+                                  let duration_ms = track["duration_ms"] as? Int else {
+                                return nil
+                            }
+
+                            let artistName = artists.compactMap { $0["name"] as? String }.joined(separator: ", ")
+                            let releaseDate = (album["release_date"] as? String) ?? ""
+
+                            return SpotifyManager.Track(
+                                id: UUID().uuidString,
+                                trackId: id,
+                                name: name,
+                                artist: artistName,
+                                album: albumName,
+                                releaseDate: formatReleaseDate(releaseDate),
+                                duration: formatDuration(duration_ms),
+                                uri: uri,
+                                isLiked: true  // These are all liked by definition
+                            )
+                        }
+
+                        return (tracks, total)
+                    }
+                }
+            }
+        } catch {
+            print("Error fetching liked songs: \(error)")
+        }
+
+        return ([], 0)
+    }
+
+    func checkSavedTracks(trackIds: [String]) async -> [Bool] {
+        guard let accessToken = accessToken else { return [] }
+
+        let idsParam = trackIds.joined(separator: ",")
+        guard let encodedIds = idsParam.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(baseURL)/me/tracks/contains?ids=\(encodedIds)") else { return [] }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await checkSavedTracks(trackIds: trackIds)
+                    } else {
+                        logout()
+                        return []
+                    }
+                } else if httpResponse.statusCode == 200 {
+                    // Parse the boolean array response
+                    if let boolArray = try? JSONDecoder().decode([Bool].self, from: data) {
+                        return boolArray
+                    }
+                }
+            }
+        } catch {
+            print("Error checking saved tracks: \(error)")
+        }
+
+        return []
+    }
+
+    func saveTracks(trackIds: [String]) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+        guard let url = URL(string: "\(baseURL)/me/tracks") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = ["ids": trackIds]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await saveTracks(trackIds: trackIds)
+                    } else {
+                        logout()
+                        return false
+                    }
+                } else if httpResponse.statusCode == 200 || httpResponse.statusCode == 204 {
+                    print("Successfully saved tracks (status \(httpResponse.statusCode)): \(trackIds)")
+                    return true
+                } else {
+                    print("Failed to save tracks: HTTP \(httpResponse.statusCode) for IDs: \(trackIds)")
+                    if let errorString = String(data: data, encoding: .utf8) {
+                        print("Error response: \(errorString)")
+                    }
+                    return false
+                }
+            }
+        } catch {
+            print("Error saving tracks: \(error)")
+            return false
+        }
+
+        return false
+    }
+
+    func removeSavedTracks(trackIds: [String]) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+        guard let url = URL(string: "\(baseURL)/me/tracks") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = ["ids": trackIds]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await removeSavedTracks(trackIds: trackIds)
+                    } else {
+                        logout()
+                        return false
+                    }
+                } else if httpResponse.statusCode == 200 || httpResponse.statusCode == 204 {
+                    print("Successfully removed saved tracks (status \(httpResponse.statusCode))")
+                    return true
+                } else {
+                    print("Failed to remove saved tracks: HTTP \(httpResponse.statusCode)")
+                    return false
+                }
+            }
+        } catch {
+            print("Error removing saved tracks: \(error)")
+            return false
+        }
+
+        return false
+    }
+
+    func deletePlaylist(playlistId: String) async -> Bool {
+        guard let accessToken = accessToken else { return false }
+        guard let url = URL(string: "\(baseURL)/playlists/\(playlistId)/followers") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await deletePlaylist(playlistId: playlistId)
+                    } else {
+                        logout()
+                        return false
+                    }
+                } else if httpResponse.statusCode == 200 {
+                    print("Successfully unfollowed/deleted playlist")
+                    return true
+                } else {
+                    print("Failed to delete playlist: HTTP \(httpResponse.statusCode)")
+                    return false
+                }
+            }
+        } catch {
+            print("Error deleting playlist: \(error)")
+            return false
+        }
+
+        return false
+    }
+
+    func createPlaylist(name: String, description: String = "", isPublic: Bool = false) async -> String? {
+        guard let accessToken = accessToken else { return nil }
+
+        // Get current user ID if we don't have it
+        if currentUserId == nil {
+            _ = await fetchCurrentUser()
+        }
+
+        guard let userId = currentUserId else { return nil }
+        guard let url = URL(string: "\(baseURL)/users/\(userId)/playlists") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "name": name,
+            "description": description,
+            "public": isPublic
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 401 {
+                    if await refreshAccessToken() {
+                        return await createPlaylist(name: name, description: description, isPublic: isPublic)
+                    } else {
+                        logout()
+                        return nil
+                    }
+                } else if httpResponse.statusCode == 201 {
+                    // Parse the created playlist ID from response
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let playlistId = json["id"] as? String {
+                        print("Successfully created playlist: \(name) with ID: \(playlistId)")
+                        return playlistId
+                    }
+                } else {
+                    print("Failed to create playlist: HTTP \(httpResponse.statusCode)")
+                    if let errorString = String(data: data, encoding: .utf8) {
+                        print("Error response: \(errorString)")
+                    }
+                    return nil
+                }
+            }
+        } catch {
+            print("Error creating playlist: \(error)")
+            return nil
+        }
+
+        return nil
     }
 
     func addTracksToPlaylist(playlistId: String, trackUris: [String]) async -> Bool {

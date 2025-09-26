@@ -68,7 +68,8 @@ final class CachedTrack {
             album: album,
             releaseDate: releaseDate,
             duration: duration,
-            uri: uri
+            uri: uri,
+            isLiked: false  // Will be updated by checking with Spotify API
         )
     }
 }

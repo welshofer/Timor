@@ -140,12 +140,12 @@ struct TrackSearchView: View {
                     TableColumn("Album", value: \.album)
                         .width(min: 150)
                     TableColumn("Year", value: \.releaseDate)
-                        .width(ideal: 80, max: 100)
+                        .width(100)
                     TableColumn("Duration", value: \.duration)
-                        .width(ideal: 60, max: 80)
+                        .width(80)
                 }
-                .onChange(of: sortOrder) { newOrder in
-                    searchResults.sort(using: newOrder)
+                .onChange(of: sortOrder) { oldValue, newValue in
+                    searchResults.sort(using: newValue)
                 }
             }
 
