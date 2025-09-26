@@ -291,6 +291,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                     name: item.name,
                     totalTracks: item.tracks.total,
                     owner: item.owner.display_name ?? item.owner.id,
+                    description: item.description,
                     isEditable: isOwner || item.collaborative
                 )
             }
@@ -333,6 +334,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                     guard let track = item.track else { return nil }
                     // Create a unique ID combining track ID and its position to handle duplicates
                     let uniqueId = "\(track.id)_\(allTracks.count + index)"
+
+                    // Get the 640x640 album art image, or the largest available
+                    let albumArtURL = track.album.images?.first(where: { $0.height == 640 && $0.width == 640 })?.url
+                        ?? track.album.images?.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })?.url
+                        ?? track.album.images?.first?.url
+
                     return SpotifyManager.Track(
                         id: uniqueId,
                         trackId: track.id,
@@ -341,7 +348,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         album: track.album.name,
                         releaseDate: formatReleaseDate(track.album.release_date),
                         duration: formatDuration(track.duration_ms),
-                        uri: track.uri
+                        uri: track.uri,
+                        albumArtURL: albumArtURL
                     )
                 }
 
@@ -409,7 +417,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return dateString
     }
 
-    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = Constants.Spotify.searchResultLimit) async -> [SpotifyManager.Track] {
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
         // Build search query - EXACTLY AS IT WAS WHEN IT WORKED
@@ -480,6 +488,27 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                     let seconds = (duration_ms % 60000) / 1000
                     let duration = String(format: "%d:%02d", minutes, seconds)
 
+                    // Get album art URL from images array (640x640 preferred)
+                    let albumArtURL: String? = {
+                        guard let images = album["images"] as? [[String: Any]],
+                              !images.isEmpty else { return nil }
+                        // Look for 640x640 image first
+                        if let largeImage = images.first(where: { img in
+                            let height = img["height"] as? Int
+                            let width = img["width"] as? Int
+                            return height == 640 && width == 640
+                        }) {
+                            return largeImage["url"] as? String
+                        }
+                        // Otherwise get the largest image available
+                        let largestImage = images.max { img1, img2 in
+                            let height1 = img1["height"] as? Int ?? 0
+                            let height2 = img2["height"] as? Int ?? 0
+                            return height1 < height2
+                        }
+                        return (largestImage ?? images.first)?["url"] as? String
+                    }()
+
                     return SpotifyManager.Track(
                         id: UUID().uuidString, // Unique ID for table selection
                         trackId: id,
@@ -488,7 +517,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         album: albumName,
                         releaseDate: releaseDate,
                         duration: duration,
-                        uri: uri
+                        uri: uri,
+                        albumArtURL: albumArtURL
                     )
                 }
             }
@@ -499,7 +529,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return []
     }
 
-    func fetchLikedSongs(limit: Int = Constants.Spotify.likedSongsBatchSize, offset: Int = 0) async -> (tracks: [SpotifyManager.Track], total: Int) {
+    func fetchLikedSongs(limit: Int = 50, offset: Int = 0) async -> (tracks: [SpotifyManager.Track], total: Int) {
         guard let accessToken = accessToken else { return ([], 0) }
         guard let url = URL(string: "\(baseURL)/me/tracks?limit=\(limit)&offset=\(offset)") else { return ([], 0) }
 
@@ -541,6 +571,27 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                             let artistName = artists.compactMap { $0["name"] as? String }.joined(separator: ", ")
                             let releaseDate = (album["release_date"] as? String) ?? ""
 
+                            // Get album art URL from images array (640x640 preferred)
+                            let albumArtURL: String? = {
+                                guard let images = album["images"] as? [[String: Any]],
+                                      !images.isEmpty else { return nil }
+                                // Look for 640x640 image first
+                                if let largeImage = images.first(where: { img in
+                                    let height = img["height"] as? Int
+                                    let width = img["width"] as? Int
+                                    return height == 640 && width == 640
+                                }) {
+                                    return largeImage["url"] as? String
+                                }
+                                // Otherwise get the largest image available
+                                let largestImage = images.max { img1, img2 in
+                                    let height1 = img1["height"] as? Int ?? 0
+                                    let height2 = img2["height"] as? Int ?? 0
+                                    return height1 < height2
+                                }
+                                return (largestImage ?? images.first)?["url"] as? String
+                            }()
+
                             return SpotifyManager.Track(
                                 id: UUID().uuidString,
                                 trackId: id,
@@ -550,6 +601,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                                 releaseDate: formatReleaseDate(releaseDate),
                                 duration: formatDuration(duration_ms),
                                 uri: uri,
+                                albumArtURL: albumArtURL,
                                 isLiked: true  // These are all liked by definition
                             )
                         }
@@ -989,6 +1041,7 @@ struct PlaylistResponse: Codable {
 struct PlaylistItem: Codable {
     let id: String
     let name: String
+    let description: String?
     let owner: Owner
     let tracks: Tracks
     let collaborative: Bool
@@ -1029,6 +1082,13 @@ struct Artist: Codable {
 struct Album: Codable {
     let name: String
     let release_date: String?
+    let images: [AlbumImage]?
+}
+
+struct AlbumImage: Codable {
+    let url: String
+    let height: Int?
+    let width: Int?
 }
 
 extension Array {

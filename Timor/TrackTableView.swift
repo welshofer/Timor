@@ -13,6 +13,7 @@ struct TrackTableView: View {
     @Binding var selectedTracks: Set<SpotifyManager.Track.ID>
     @Binding var searchText: String
     @Binding var showDeleteConfirmation: Bool
+    @Binding var selectedTrack: SpotifyManager.Track?
     
     var filteredTracks: [SpotifyManager.Track] {
         if searchText.isEmpty {
@@ -36,6 +37,14 @@ struct TrackTableView: View {
             },
             set: { newSelection in
                 selectedTracks = newSelection
+                // Update selected track for inspector
+                if let firstId = newSelection.first,
+                   newSelection.count == 1,
+                   let track = filteredTracks.first(where: { $0.id == firstId }) {
+                    selectedTrack = track
+                } else if newSelection.isEmpty {
+                    selectedTrack = nil
+                }
             }
         )
     }

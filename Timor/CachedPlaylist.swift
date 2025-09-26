@@ -41,12 +41,14 @@ final class CachedTrack {
     var releaseDate: String
     var duration: String
     var uri: String
+    var albumArtURL: String?
     var position: Int // Track position in playlist
 
     var playlist: CachedPlaylist?
 
     init(trackId: String, uniqueId: String, name: String, artist: String,
-         album: String, releaseDate: String, duration: String, uri: String, position: Int) {
+         album: String, releaseDate: String, duration: String, uri: String,
+         albumArtURL: String? = nil, position: Int) {
         self.trackId = trackId
         self.uniqueId = uniqueId
         self.name = name
@@ -55,6 +57,7 @@ final class CachedTrack {
         self.releaseDate = releaseDate
         self.duration = duration
         self.uri = uri
+        self.albumArtURL = albumArtURL
         self.position = position
     }
 
@@ -69,6 +72,7 @@ final class CachedTrack {
             releaseDate: releaseDate,
             duration: duration,
             uri: uri,
+            albumArtURL: albumArtURL,
             isLiked: false  // Will be updated by checking with Spotify API
         )
     }

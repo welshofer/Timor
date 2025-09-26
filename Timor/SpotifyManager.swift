@@ -14,7 +14,9 @@ import UniformTypeIdentifiers
 import SwiftData
 
 extension UTType {
-    static var spotifyTrack: UTType = UTType(exportedAs: "xsf.welshofer.Timor.spotifytrack")
+    static var spotifyTrack: UTType {
+        UTType(exportedAs: "xsf.welshofer.Timor.spotifytrack")
+    }
 }
 
 @MainActor
@@ -47,6 +49,7 @@ class SpotifyManager: ObservableObject {
         let name: String
         let totalTracks: Int
         let owner: String
+        let description: String?
         let isEditable: Bool
     }
 
@@ -59,6 +62,7 @@ class SpotifyManager: ObservableObject {
         let releaseDate: String
         let duration: String
         let uri: String
+        let albumArtURL: String?
         var isLiked: Bool = false
 
         static var transferRepresentation: some TransferRepresentation {
@@ -192,6 +196,7 @@ class SpotifyManager: ObservableObject {
                 name: playlist.name,
                 totalTracks: playlist.totalTracks + addedCount,
                 owner: playlist.owner,
+                description: playlist.description,
                 isEditable: playlist.isEditable
             )
             playlists[index] = updatedPlaylist
@@ -266,7 +271,7 @@ class SpotifyManager: ObservableObject {
         }
     }
 
-    func fetchLikedSongs() {
+    func fetchLikedSongs(forceRefresh: Bool = false) {
         print("Starting to fetch liked songs...")
         
         // Cancel any existing fetch operation
@@ -277,8 +282,8 @@ class SpotifyManager: ObservableObject {
         currentFetchId = fetchId
         
         fetchTask = Task {
-            // First, try to load from cache
-            if let cachedTracks = loadLikedSongsFromCache() {
+            // First, try to load from cache (unless force refresh)
+            if !forceRefresh, let cachedTracks = loadLikedSongsFromCache() {
                 print("Loaded \(cachedTracks.count) liked songs from cache")
                 await MainActor.run {
                     self.currentPlaylistTracks = cachedTracks
@@ -416,6 +421,7 @@ class SpotifyManager: ObservableObject {
                     releaseDate: track.releaseDate,
                     duration: track.duration,
                     uri: track.uri,
+                    albumArtURL: track.albumArtURL,
                     position: index
                 )
             }
@@ -434,7 +440,7 @@ class SpotifyManager: ObservableObject {
         }
     }
 
-    func fetchTracksForPlaylist(_ playlistId: String) {
+    func fetchTracksForPlaylist(_ playlistId: String, forceRefresh: Bool = false) {
         // Cancel any existing fetch operation
         fetchTask?.cancel()
         
@@ -452,8 +458,8 @@ class SpotifyManager: ObservableObject {
             loadingProgress = (0, 0)
             currentPlaylistTracks = []  // Always clear current tracks first
 
-            // First, try to load from cache WITH VALIDATION
-            if let cachedTracks = await loadCachedTracks(for: targetPlaylistId) {
+            // First, try to load from cache WITH VALIDATION (unless force refresh)
+            if !forceRefresh, let cachedTracks = await loadCachedTracks(for: targetPlaylistId) {
                 // VALIDATE: Check we're still on the same playlist and not cancelled
                 guard currentFetchId == fetchId && selectedPlaylist?.id == targetPlaylistId else {
                     print("Playlist changed or request cancelled during cache load")
@@ -623,6 +629,7 @@ class SpotifyManager: ObservableObject {
                     releaseDate: track.releaseDate,
                     duration: track.duration,
                     uri: track.uri,
+                    albumArtURL: track.albumArtURL,
                     position: index
                 )
                 cachedTrack.playlist = cachedPlaylist

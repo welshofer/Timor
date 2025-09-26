@@ -25,6 +25,8 @@ struct ContentView: View {
     @State private var newPlaylistName = ""
     @State private var newPlaylistDescription = ""
     @State private var isCreatingPlaylist = false
+    @State private var showInspector = false
+    @State private var selectedTrack: SpotifyManager.Track?
     
     var body: some View {
         NavigationSplitView {
@@ -48,11 +50,17 @@ struct ContentView: View {
                     showDeleteConfirmation: $showDeleteConfirmation,
                     showTrackSearch: $showTrackSearch,
                     showShuffleAlert: $showShuffleAlert,
-                    shuffleResult: $shuffleResult
+                    shuffleResult: $shuffleResult,
+                    selectedTrack: $selectedTrack,
+                    showInspector: $showInspector
                 )
             } else {
                 EmptyDetailView()
             }
+        }
+        .inspector(isPresented: $showInspector) {
+            TrackInspectorView(track: selectedTrack)
+                .inspectorColumnWidth(min: 280, ideal: 280, max: 320)
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()

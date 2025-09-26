@@ -17,6 +17,8 @@ struct PlaylistDetailView: View {
     @Binding var showTrackSearch: Bool
     @Binding var showShuffleAlert: Bool
     @Binding var shuffleResult: Bool
+    @Binding var selectedTrack: SpotifyManager.Track?
+    @Binding var showInspector: Bool
     
     var filteredTracks: [SpotifyManager.Track] {
         if searchText.isEmpty {
@@ -55,11 +57,11 @@ struct PlaylistDetailView: View {
                     playlist: selectedPlaylist,
                     selectedTracks: $selectedTracks,
                     searchText: $searchText,
-                    showDeleteConfirmation: $showDeleteConfirmation
+                    showDeleteConfirmation: $showDeleteConfirmation,
+                    selectedTrack: $selectedTrack
                 )
             }
         }
-        .searchable(text: $searchText, prompt: "Search tracks")
         .onChange(of: searchText) { oldValue, newValue in
             selectedTracks.removeAll()
         }
@@ -72,7 +74,9 @@ struct PlaylistDetailView: View {
                 showDeleteConfirmation: $showDeleteConfirmation,
                 showShuffleAlert: $showShuffleAlert,
                 shuffleResult: $shuffleResult,
-                searchText: $searchText
+                searchText: $searchText,
+                showInspector: $showInspector,
+                selectedTrack: $selectedTrack
             )
         }
     }
@@ -104,13 +108,19 @@ struct PlaylistHeader: View {
                         Text("\(spotifyManager.currentPlaylistTracks.count) liked songs")
                     } else if let playlist = selectedPlaylist {
                         Text("By \(playlist.owner) • \(playlist.totalTracks) tracks")
+
+                        if let description = playlist.description, !description.isEmpty {
+                            Text("• \(description)")
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
-                    
+
                     if !searchText.isEmpty {
                         Text("• Showing \(filteredTracksCount)")
                             .foregroundColor(.accentColor)
                     }
-                    
+
                     CacheStalenessIndicator(spotifyManager: spotifyManager)
                 }
                 .font(.subheadline)
@@ -180,10 +190,20 @@ struct PlaylistToolbar: ToolbarContent {
     @Binding var showShuffleAlert: Bool
     @Binding var shuffleResult: Bool
     @Binding var searchText: String
+    @Binding var showInspector: Bool
+    @Binding var selectedTrack: SpotifyManager.Track?
     
     var body: some ToolbarContent {
-        if let playlist = selectedPlaylist, playlist.isEditable {
-            ToolbarItem(placement: .primaryAction) {
+        // Dedicated search placement keeps the field leading in Liquid Glass toolbars
+        ToolbarItem(placement: .search) {
+            SearchField("Search tracks", text: $searchText)
+                .frame(minWidth: 240)
+                .help("Search within the current playlist")
+        }
+
+        // Main toolbar buttons group stays in the primary action slot
+        ToolbarItemGroup(placement: .primaryAction) {
+            if let playlist = selectedPlaylist, playlist.isEditable {
                 Button {
                     showTrackSearch = true
                 } label: {
@@ -191,25 +211,25 @@ struct PlaylistToolbar: ToolbarContent {
                 }
                 .help("Search and add tracks to this playlist")
             }
-        }
-        
-        ToolbarItem(placement: .primaryAction) {
+
             Button {
                 searchText = ""
+                // Clear selected track and close inspector on refresh
+                selectedTrack = nil
+                showInspector = false
+
                 if let playlistId = selectedPlaylist?.id {
-                    spotifyManager.fetchTracksForPlaylist(playlistId)
+                    spotifyManager.fetchTracksForPlaylist(playlistId, forceRefresh: true)
                 } else {
-                    spotifyManager.fetchLikedSongs()
+                    spotifyManager.fetchLikedSongs(forceRefresh: true)
                 }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .disabled(spotifyManager.isLoadingTracks)
-            .help("Refresh tracks")
-        }
-        
-        if !selectedTracks.isEmpty && (selectedPlaylist?.isEditable ?? false) {
-            ToolbarItem(placement: .primaryAction) {
+            .help("Refresh tracks from Spotify")
+
+            if !selectedTracks.isEmpty && (selectedPlaylist?.isEditable ?? false) {
                 Button {
                     showDeleteConfirmation = true
                 } label: {
@@ -217,10 +237,8 @@ struct PlaylistToolbar: ToolbarContent {
                 }
                 .help("Delete selected tracks from playlist")
             }
-        }
-        
-        if !spotifyManager.currentPlaylistTracks.isEmpty {
-            ToolbarItem(placement: .primaryAction) {
+
+            if !spotifyManager.currentPlaylistTracks.isEmpty {
                 Button {
                     let playlistName = selectedPlaylist?.name ?? "Liked Songs"
                     spotifyManager.exportPlaylistToCSV(playlistName: playlistName)
@@ -228,10 +246,8 @@ struct PlaylistToolbar: ToolbarContent {
                     Label("Export", systemImage: "square.and.arrow.down")
                 }
                 .help("Export to CSV file")
-            }
-            
-            if let playlist = selectedPlaylist, playlist.isEditable {
-                ToolbarItem(placement: .primaryAction) {
+
+                if let playlist = selectedPlaylist, playlist.isEditable {
                     Button {
                         Task {
                             shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
@@ -244,6 +260,16 @@ struct PlaylistToolbar: ToolbarContent {
                     .help("Shuffle and save playlist order")
                 }
             }
+        }
+
+        // Inspector affordance gets its own trailing placement
+        ToolbarItem(placement: .inspector) {
+            Button {
+                showInspector.toggle()
+            } label: {
+                Image(systemName: "sidebar.trailing")
+            }
+            .help("Toggle Inspector")
         }
     }
 }
