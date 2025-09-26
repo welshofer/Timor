@@ -23,9 +23,9 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     private var authSession: ASWebAuthenticationSession?
     private var currentUserId: String?
 
-    private let baseURL = "https://api.spotify.com/v1"
-    private let tokenURL = "https://accounts.spotify.com/api/token"
-    private let authURL = "https://accounts.spotify.com/authorize"
+    private let baseURL = Constants.Spotify.baseURL
+    private let tokenURL = Constants.Spotify.tokenURL
+    private let authURL = Constants.Spotify.authURL
 
     private override init() {
         super.init()
@@ -41,7 +41,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     }
 
     var redirectURI: String {
-        "timor://spotify-callback"
+        Constants.Spotify.redirectURI
     }
 
     private func loadTokens() {
@@ -93,7 +93,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             return
         }
 
-        let scopes = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private user-library-read user-library-modify"
+        let scopes = Constants.Spotify.scopes
         let state = UUID().uuidString
 
         var components = URLComponents(string: authURL)!
@@ -264,7 +264,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             _ = await fetchCurrentUser()
         }
 
-        guard let url = URL(string: "\(baseURL)/me/playlists?limit=50") else { return [] }
+        guard let url = URL(string: "\(baseURL)/me/playlists?limit=\(Constants.Spotify.playlistFetchLimit)") else { return [] }
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -305,7 +305,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         var allTracks: [SpotifyManager.Track] = []
         var offset = 0
-        let limit = 100
+        let limit = Constants.Spotify.trackFetchLimit
         var hasMore = true
 
         while hasMore {
@@ -409,7 +409,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return dateString
     }
 
-    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = Constants.Spotify.searchResultLimit) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
         // Build search query - EXACTLY AS IT WAS WHEN IT WORKED
@@ -499,7 +499,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return []
     }
 
-    func fetchLikedSongs(limit: Int = 50, offset: Int = 0) async -> (tracks: [SpotifyManager.Track], total: Int) {
+    func fetchLikedSongs(limit: Int = Constants.Spotify.likedSongsBatchSize, offset: Int = 0) async -> (tracks: [SpotifyManager.Track], total: Int) {
         guard let accessToken = accessToken else { return ([], 0) }
         guard let url = URL(string: "\(baseURL)/me/tracks?limit=\(limit)&offset=\(offset)") else { return ([], 0) }
 
@@ -909,7 +909,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         guard let accessToken = accessToken else { return false }
 
         // Spotify limits to 100 tracks per request, so we need to batch
-        let chunks = trackUris.chunked(into: 100)
+        let chunks = trackUris.chunked(into: Constants.Spotify.trackFetchLimit)
 
         for (index, chunk) in chunks.enumerated() {
             // First chunk replaces all, subsequent chunks append

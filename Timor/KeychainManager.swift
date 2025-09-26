@@ -11,7 +11,7 @@ import Security
 class KeychainManager {
     static let shared = KeychainManager()
 
-    private let service = "com.timor.spotify"
+    private let service = Constants.Keychain.service
 
     private init() {}
 
