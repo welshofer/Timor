@@ -30,11 +30,17 @@ class SpotifyManager: ObservableObject {
     @Published var isShuffling = false
     @Published var selectedPlaylist: Playlist?
     @Published var isViewingLikedSongs = false
+    @Published var lastError: String?
+    @Published var showError = false
+    @Published var lastCacheUpdate: Date?
+    @Published var isUsingCache = false
 
     private let keychain = KeychainManager.shared
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
     private var shuffleTask: Task<Bool, Never>?
+    private var fetchTask: Task<Void, Never>?
+    private var currentFetchId = UUID()
 
     struct Playlist: Identifiable {
         let id: String
@@ -72,7 +78,7 @@ class SpotifyManager: ObservableObject {
                 CachedTrack.self
             ])
             // Use a separate store file to avoid conflicts with existing Item model
-            let url = URL.applicationSupportDirectory.appending(path: "SpotifyCache.store")
+            let url = URL.applicationSupportDirectory.appending(path: Constants.Cache.cacheStoreFileName)
             let modelConfiguration = ModelConfiguration(
                 schema: schema,
                 url: url,
@@ -109,24 +115,24 @@ class SpotifyManager: ObservableObject {
 
     var clientID: String {
         get {
-            (try? keychain.retrieve(for: "spotify_client_id")) ?? ""
+            (try? keychain.retrieve(for: Constants.Keychain.clientIdKey)) ?? ""
         }
         set {
-            try? keychain.save(newValue, for: "spotify_client_id")
+            try? keychain.save(newValue, for: Constants.Keychain.clientIdKey)
         }
     }
 
     var clientSecret: String {
         get {
-            (try? keychain.retrieve(for: "spotify_client_secret")) ?? ""
+            (try? keychain.retrieve(for: Constants.Keychain.clientSecretKey)) ?? ""
         }
         set {
-            try? keychain.save(newValue, for: "spotify_client_secret")
+            try? keychain.save(newValue, for: Constants.Keychain.clientSecretKey)
         }
     }
 
     var redirectURI: String {
-        "timor://spotify-callback"
+        Constants.Spotify.redirectURI
     }
 
     func authenticate() {
@@ -142,9 +148,15 @@ class SpotifyManager: ObservableObject {
 
     func fetchPlaylists() {
         Task {
-            let webPlaylists = await SpotifyWebAPI.shared.fetchUserPlaylists()
-            await MainActor.run {
-                self.playlists = webPlaylists
+            do {
+                let webPlaylists = await SpotifyWebAPI.shared.fetchUserPlaylists()
+                await MainActor.run {
+                    self.playlists = webPlaylists
+                    if webPlaylists.isEmpty && SpotifyWebAPI.shared.isAuthenticated {
+                        self.lastError = "Failed to fetch playlists. Check your connection and try again."
+                        self.showError = true
+                    }
+                }
             }
         }
     }
@@ -230,9 +242,9 @@ class SpotifyManager: ObservableObject {
         let tracksSnapshot = currentPlaylistTracks
         guard !tracksSnapshot.isEmpty else { return }
 
-        // Check all tracks in batches of 50 (Spotify API limit)
-        for startIndex in stride(from: 0, to: tracksSnapshot.count, by: 50) {
-            let endIndex = min(startIndex + 50, tracksSnapshot.count)
+        // Check all tracks in batches (Spotify API limit)
+        for startIndex in stride(from: 0, to: tracksSnapshot.count, by: Constants.Spotify.trackCheckBatchSize) {
+            let endIndex = min(startIndex + Constants.Spotify.trackCheckBatchSize, tracksSnapshot.count)
             let batch = Array(tracksSnapshot[startIndex..<endIndex])
             let trackIds = batch.map { $0.trackId }
 
@@ -256,12 +268,29 @@ class SpotifyManager: ObservableObject {
 
     func fetchLikedSongs() {
         print("Starting to fetch liked songs...")
-        Task {
+        
+        // Cancel any existing fetch operation
+        fetchTask?.cancel()
+        
+        // Generate new fetch ID for this request
+        let fetchId = UUID()
+        currentFetchId = fetchId
+        
+        fetchTask = Task {
             // First, try to load from cache
             if let cachedTracks = loadLikedSongsFromCache() {
                 print("Loaded \(cachedTracks.count) liked songs from cache")
                 await MainActor.run {
                     self.currentPlaylistTracks = cachedTracks
+                    self.isUsingCache = true
+                    // Try to get cache date
+                    if let cached = try? self.modelContext?.fetch(
+                        FetchDescriptor<CachedPlaylist>(
+                            predicate: #Predicate { $0.playlistId == "LIKED_SONGS" }
+                        )
+                    ).first {
+                        self.lastCacheUpdate = cached.lastSynced
+                    }
                 }
 
                 // Still fetch from API to check for updates
@@ -279,10 +308,18 @@ class SpotifyManager: ObservableObject {
     private func fetchAndUpdateLikedSongs() async {
         var allTracks: [Track] = []
         var offset = 0
-        let limit = 50
+        let limit = Constants.Spotify.likedSongsBatchSize
         var hasMore = true
+        
+        // Store the current fetch ID to check for cancellation
+        let fetchId = currentFetchId
 
         while hasMore {
+            // Check if this request was cancelled
+            guard fetchId == currentFetchId else {
+                print("Liked songs fetch cancelled")
+                return
+            }
             print("Fetching batch at offset \(offset)...")
             let result = await SpotifyWebAPI.shared.fetchLikedSongs(limit: limit, offset: offset)
             print("Got \(result.tracks.count) tracks in this batch")
@@ -309,6 +346,8 @@ class SpotifyManager: ObservableObject {
         await MainActor.run {
             self.currentPlaylistTracks = allTracks
             self.isLoadingTracks = false
+            self.isUsingCache = false
+            self.lastCacheUpdate = Date() // Fresh from API
         }
     }
 
@@ -396,25 +435,43 @@ class SpotifyManager: ObservableObject {
     }
 
     func fetchTracksForPlaylist(_ playlistId: String) {
-        Task {
+        // Cancel any existing fetch operation
+        fetchTask?.cancel()
+        
+        // Generate new fetch ID for this request
+        let fetchId = UUID()
+        currentFetchId = fetchId
+        
+        fetchTask = Task {
             // CRITICAL: Store the playlist ID we're fetching for validation
             let targetPlaylistId = playlistId
 
+            guard currentFetchId == fetchId else { return } // Check if cancelled
+            
             isLoadingTracks = true
             loadingProgress = (0, 0)
             currentPlaylistTracks = []  // Always clear current tracks first
 
             // First, try to load from cache WITH VALIDATION
             if let cachedTracks = await loadCachedTracks(for: targetPlaylistId) {
-                // VALIDATE: Check we're still on the same playlist before using cache
-                guard selectedPlaylist?.id == targetPlaylistId else {
-                    print("Playlist changed during cache load, aborting cache use")
+                // VALIDATE: Check we're still on the same playlist and not cancelled
+                guard currentFetchId == fetchId && selectedPlaylist?.id == targetPlaylistId else {
+                    print("Playlist changed or request cancelled during cache load")
                     return
                 }
 
                 await MainActor.run {
                     self.currentPlaylistTracks = cachedTracks
                     self.isLoadingTracks = false
+                    self.isUsingCache = true
+                    // Get cache date from SwiftData
+                    if let cached = try? self.modelContext?.fetch(
+                        FetchDescriptor<CachedPlaylist>(
+                            predicate: #Predicate { $0.playlistId == targetPlaylistId }
+                        )
+                    ).first {
+                        self.lastCacheUpdate = cached.lastSynced
+                    }
                 }
 
                 // Check liked status for visible tracks
@@ -436,16 +493,27 @@ class SpotifyManager: ObservableObject {
                         }
                     }
                 )
+                
+                // Check if we got no tracks when we expected some
+                if tracks.isEmpty && (selectedPlaylist?.totalTracks ?? 0) > 0 {
+                    await MainActor.run {
+                        self.lastError = "Failed to load playlist tracks. Please try again."
+                        self.showError = true
+                    }
+                }
 
-                // VALIDATE: Check we're still on the same playlist before updating
-                guard await MainActor.run(body: { self.selectedPlaylist?.id == targetPlaylistId }) else {
-                    print("Playlist changed during API fetch, aborting update")
+                // VALIDATE: Check we're still on the same playlist and not cancelled
+                let stillValid = await MainActor.run { self.selectedPlaylist?.id == targetPlaylistId }
+                guard currentFetchId == fetchId && stillValid else {
+                    print("Playlist changed or request cancelled during API fetch")
                     return
                 }
 
                 await MainActor.run {
                     self.currentPlaylistTracks = tracks
                     self.isLoadingTracks = false
+                    self.isUsingCache = false
+                    self.lastCacheUpdate = Date() // Fresh from API
                 }
 
                 // Check liked status for visible tracks
@@ -453,8 +521,8 @@ class SpotifyManager: ObservableObject {
                     await self.checkTracksLikedStatus()
                 }
 
-                // Cache ONLY if we're still on the same playlist
-                if selectedPlaylist?.id == targetPlaylistId {
+                // Cache ONLY if we're still on the same playlist and not cancelled
+                if currentFetchId == fetchId && selectedPlaylist?.id == targetPlaylistId {
                     await cachePlaylistTracks(playlistId: targetPlaylistId, tracks: tracks)
                 }
             }
@@ -729,7 +797,7 @@ class SpotifyManager: ObservableObject {
             // VERIFY TRACK COUNT MATCHES PLAYLIST (skip for playlists we just modified)
             // Allow some flexibility for recently modified playlists
             let trackCountDifference = abs(originalCount - currentSelectedPlaylist.totalTracks)
-            if trackCountDifference > 10 && currentSelectedPlaylist.totalTracks > 0 {
+            if trackCountDifference > Constants.Validation.trackCountDifferenceThreshold && currentSelectedPlaylist.totalTracks > 0 {
                 print("WARNING: Large track count difference! Playlist reports \(currentSelectedPlaylist.totalTracks) but we have \(originalCount)")
                 // Don't abort - the local count is likely more accurate if we just added/deleted tracks
             }
@@ -820,7 +888,7 @@ class SpotifyManager: ObservableObject {
             await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
         } else {
             // Revert on failure
-            await fetchTracksForPlaylist(playlistId)
+            fetchTracksForPlaylist(playlistId)
         }
     }
 
