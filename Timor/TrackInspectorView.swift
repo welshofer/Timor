@@ -103,7 +103,7 @@ struct TrackInspectorView: View {
         }
         .padding()
         .frame(width: 280)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(.regularMaterial)
         .onChange(of: track?.albumArtURL) { oldValue, newValue in
             if let urlString = newValue {
                 loadAlbumArt(from: urlString)

@@ -62,6 +62,7 @@ struct PlaylistDetailView: View {
                 )
             }
         }
+        .searchable(text: $searchText, placement: .toolbarPrincipal, prompt: "Search tracks")
         .onChange(of: searchText) { oldValue, newValue in
             selectedTracks.removeAll()
         }
@@ -194,82 +195,77 @@ struct PlaylistToolbar: ToolbarContent {
     @Binding var selectedTrack: SpotifyManager.Track?
     
     var body: some ToolbarContent {
-        // Dedicated search placement keeps the field leading in Liquid Glass toolbars
-        ToolbarItem(placement: .search) {
-            SearchField("Search tracks", text: $searchText)
-                .frame(minWidth: 240)
-                .help("Search within the current playlist")
-        }
-
-        // Main toolbar buttons group stays in the primary action slot
+        // Main action buttons group
         ToolbarItemGroup(placement: .primaryAction) {
-            if let playlist = selectedPlaylist, playlist.isEditable {
-                Button {
-                    showTrackSearch = true
-                } label: {
-                    Label("Add Tracks", systemImage: "plus.square.fill.on.square.fill")
-                }
-                .help("Search and add tracks to this playlist")
-            }
-
-            Button {
-                searchText = ""
-                // Clear selected track and close inspector on refresh
-                selectedTrack = nil
-                showInspector = false
-
-                if let playlistId = selectedPlaylist?.id {
-                    spotifyManager.fetchTracksForPlaylist(playlistId, forceRefresh: true)
-                } else {
-                    spotifyManager.fetchLikedSongs(forceRefresh: true)
-                }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(spotifyManager.isLoadingTracks)
-            .help("Refresh tracks from Spotify")
-
-            if !selectedTracks.isEmpty && (selectedPlaylist?.isEditable ?? false) {
-                Button {
-                    showDeleteConfirmation = true
-                } label: {
-                    Label("Delete \(selectedTracks.count)", systemImage: "trash")
-                }
-                .help("Delete selected tracks from playlist")
-            }
-
-            if !spotifyManager.currentPlaylistTracks.isEmpty {
-                Button {
-                    let playlistName = selectedPlaylist?.name ?? "Liked Songs"
-                    spotifyManager.exportPlaylistToCSV(playlistName: playlistName)
-                } label: {
-                    Label("Export", systemImage: "square.and.arrow.down")
-                }
-                .help("Export to CSV file")
-
+            ControlGroup {
                 if let playlist = selectedPlaylist, playlist.isEditable {
                     Button {
-                        Task {
-                            shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
-                            showShuffleAlert = true
-                        }
+                        showTrackSearch = true
                     } label: {
-                        Label("Shuffle", systemImage: "shuffle")
+                        Label("Add Tracks", systemImage: "plus.square.fill.on.square.fill")
                     }
-                    .disabled(spotifyManager.isShuffling || spotifyManager.isLoadingTracks)
-                    .help("Shuffle and save playlist order")
+                    .help("Search and add tracks to this playlist")
+                }
+
+                Button {
+                    searchText = ""
+                    selectedTrack = nil
+                    showInspector = false
+
+                    if let playlistId = selectedPlaylist?.id {
+                        spotifyManager.fetchTracksForPlaylist(playlistId, forceRefresh: true)
+                    } else {
+                        spotifyManager.fetchLikedSongs(forceRefresh: true)
+                    }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(spotifyManager.isLoadingTracks)
+                .help("Refresh tracks from Spotify")
+
+                if !selectedTracks.isEmpty && (selectedPlaylist?.isEditable ?? false) {
+                    Button {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Label("Delete \(selectedTracks.count)", systemImage: "trash")
+                    }
+                    .help("Delete selected tracks from playlist")
+                }
+
+                if !spotifyManager.currentPlaylistTracks.isEmpty {
+                    Button {
+                        let playlistName = selectedPlaylist?.name ?? "Liked Songs"
+                        spotifyManager.exportPlaylistToCSV(playlistName: playlistName)
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.down")
+                    }
+                    .help("Export to CSV file")
+
+                    if let playlist = selectedPlaylist, playlist.isEditable {
+                        Button {
+                            Task {
+                                shuffleResult = await spotifyManager.shuffleAndSavePlaylist(playlist.id)
+                                showShuffleAlert = true
+                            }
+                        } label: {
+                            Label("Shuffle", systemImage: "shuffle")
+                        }
+                        .disabled(spotifyManager.isShuffling || spotifyManager.isLoadingTracks)
+                        .help("Shuffle and save playlist order")
+                    }
                 }
             }
+            .controlGroupStyle(.navigation)
         }
-
-        // Inspector affordance gets its own trailing placement
-        ToolbarItem(placement: .inspector) {
+      //  ToolbarSpacer(.flexible)
+        ToolbarItem() {
             Button {
                 showInspector.toggle()
             } label: {
                 Image(systemName: "sidebar.trailing")
             }
-            .help("Toggle Inspector")
+            .disabled(selectedTrack == nil)
+            .help(selectedTrack == nil ? "Select a track to view details" : "Toggle Inspector")
         }
     }
 }
