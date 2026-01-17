@@ -306,6 +306,90 @@ class SpotifyManager: ObservableObject {
         return success
     }
 
+    // MARK: - Bulk Like/Unlike
+
+    /// Likes multiple tracks at once (max 50 per batch)
+    func bulkLikeTracks(_ tracks: [Track]) async -> (succeeded: Int, failed: Int) {
+        guard !tracks.isEmpty else { return (0, 0) }
+
+        let batchSize = Constants.Spotify.bulkLikeLimit
+        var succeeded = 0
+        var failed = 0
+
+        // Filter to only unlike tracks
+        let tracksToLike = tracks.filter { !$0.isLiked }
+        guard !tracksToLike.isEmpty else { return (0, 0) }
+
+        // Process in batches
+        for batchStart in stride(from: 0, to: tracksToLike.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, tracksToLike.count)
+            let batch = Array(tracksToLike[batchStart..<batchEnd])
+            let trackIds = batch.map { $0.trackId }
+
+            let success = await SpotifyWebAPI.shared.saveTracks(trackIds: trackIds)
+            if success {
+                succeeded += batch.count
+                // Update local liked status
+                await MainActor.run {
+                    for track in batch {
+                        if let index = self.currentPlaylistTracks.firstIndex(where: { $0.id == track.id }) {
+                            self.currentPlaylistTracks[index].isLiked = true
+                        }
+                    }
+                }
+            } else {
+                failed += batch.count
+            }
+        }
+
+        Self.logger.info("Bulk like completed: \(succeeded) succeeded, \(failed) failed")
+        return (succeeded, failed)
+    }
+
+    /// Unlikes multiple tracks at once (max 50 per batch)
+    func bulkUnlikeTracks(_ tracks: [Track]) async -> (succeeded: Int, failed: Int) {
+        guard !tracks.isEmpty else { return (0, 0) }
+
+        let batchSize = Constants.Spotify.bulkLikeLimit
+        var succeeded = 0
+        var failed = 0
+
+        // Filter to only liked tracks
+        let tracksToUnlike = tracks.filter { $0.isLiked }
+        guard !tracksToUnlike.isEmpty else { return (0, 0) }
+
+        // Process in batches
+        for batchStart in stride(from: 0, to: tracksToUnlike.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, tracksToUnlike.count)
+            let batch = Array(tracksToUnlike[batchStart..<batchEnd])
+            let trackIds = batch.map { $0.trackId }
+
+            let success = await SpotifyWebAPI.shared.removeSavedTracks(trackIds: trackIds)
+            if success {
+                succeeded += batch.count
+                // Update local liked status
+                await MainActor.run {
+                    for track in batch {
+                        if let index = self.currentPlaylistTracks.firstIndex(where: { $0.id == track.id }) {
+                            self.currentPlaylistTracks[index].isLiked = false
+                        }
+                    }
+
+                    // If viewing Liked Songs, remove from current list
+                    if self.isViewingLikedSongs {
+                        let trackIdsToRemove = Set(batch.map { $0.trackId })
+                        self.currentPlaylistTracks.removeAll { trackIdsToRemove.contains($0.trackId) }
+                    }
+                }
+            } else {
+                failed += batch.count
+            }
+        }
+
+        Self.logger.info("Bulk unlike completed: \(succeeded) succeeded, \(failed) failed")
+        return (succeeded, failed)
+    }
+
     func checkTracksLikedStatus() async {
         // Capture a snapshot of tracks to avoid range errors if the array changes
         let tracksSnapshot = currentPlaylistTracks

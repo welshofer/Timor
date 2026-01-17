@@ -15,6 +15,12 @@ enum Constants {
         static let searchResultLimit = 50
         static let likedSongsBatchSize = 50
         static let trackCheckBatchSize = 50
+        static let bulkLikeLimit = 50  // Max tracks per like/unlike API call
+
+        // Rate Limiting
+        static let minRequestInterval: TimeInterval = 0.1  // 100ms between requests
+        static let maxRetries = 5
+        static let baseBackoffSeconds: TimeInterval = 1.0
         
         // API Endpoints
         static let baseURL = "https://api.spotify.com/v1"
