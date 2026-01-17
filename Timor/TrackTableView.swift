@@ -25,31 +25,53 @@ struct TrackTableView: View {
     @State private var lastTrackCount: Int = 0
     @State private var lastSearchText: String = ""
 
+    // Sorting state
+    @State private var sortOrder: [KeyPathComparator<SpotifyManager.Track>] = []
+
+    // Advanced filter state
+    @State private var trackFilter = TrackFilter()
+    @State private var showFilterPopover = false
+
     var filteredTracks: [SpotifyManager.Track] {
         // Use cached results if inputs haven't changed
         let currentTrackCount = spotifyManager.currentPlaylistTracks.count
-        if debouncedSearchText == lastSearchText && currentTrackCount == lastTrackCount {
+        if debouncedSearchText == lastSearchText && currentTrackCount == lastTrackCount && !trackFilter.isActive {
             return cachedFilteredTracks
         }
 
-        // Recompute filter
-        if debouncedSearchText.isEmpty {
-            return spotifyManager.currentPlaylistTracks
+        var result = spotifyManager.currentPlaylistTracks
+
+        // Apply text search filter
+        if !debouncedSearchText.isEmpty {
+            let lowercasedSearch = debouncedSearchText.lowercased()
+            result = result.filter { track in
+                track.name.lowercased().contains(lowercasedSearch) ||
+                track.artist.lowercased().contains(lowercasedSearch) ||
+                track.album.lowercased().contains(lowercasedSearch)
+            }
         }
 
-        let lowercasedSearch = debouncedSearchText.lowercased()
-        return spotifyManager.currentPlaylistTracks.filter { track in
-            track.name.lowercased().contains(lowercasedSearch) ||
-            track.artist.lowercased().contains(lowercasedSearch) ||
-            track.album.lowercased().contains(lowercasedSearch)
+        // Apply advanced filter
+        if trackFilter.isActive {
+            result = result.filter { trackFilter.matches($0) }
         }
+
+        return result
+    }
+
+    /// Sorted and filtered tracks for display
+    var sortedFilteredTracks: [SpotifyManager.Track] {
+        if sortOrder.isEmpty {
+            return filteredTracks
+        }
+        return filteredTracks.sorted(using: sortOrder)
     }
     
     // Safe selection that only includes tracks in current filtered results
     var safeSelection: Binding<Set<SpotifyManager.Track.ID>> {
         Binding(
             get: {
-                let validIDs = Set(filteredTracks.map { $0.id })
+                let validIDs = Set(sortedFilteredTracks.map { $0.id })
                 return selectedTracks.intersection(validIDs)
             },
             set: { newSelection in
@@ -57,7 +79,7 @@ struct TrackTableView: View {
                 // Update selected track for inspector
                 if let firstId = newSelection.first,
                    newSelection.count == 1,
-                   let track = filteredTracks.first(where: { $0.id == firstId }) {
+                   let track = sortedFilteredTracks.first(where: { $0.id == firstId }) {
                     selectedTrack = track
                 } else if newSelection.isEmpty {
                     selectedTrack = nil
@@ -65,14 +87,19 @@ struct TrackTableView: View {
             }
         )
     }
-    
+
     /// Tracks that are currently selected (for drag & drop)
     var selectedTrackObjects: [SpotifyManager.Track] {
-        filteredTracks.filter { selectedTracks.contains($0.id) }
+        sortedFilteredTracks.filter { selectedTracks.contains($0.id) }
+    }
+
+    /// Whether sorting is currently active
+    var isSortingActive: Bool {
+        !sortOrder.isEmpty
     }
 
     var body: some View {
-        Table(filteredTracks, selection: safeSelection) {
+        Table(sortedFilteredTracks, selection: safeSelection, sortOrder: $sortOrder) {
             TableColumn("Title", value: \.name)
                 .width(min: 200)
             TableColumn("Artist", value: \.artist)
@@ -121,7 +148,66 @@ struct TrackTableView: View {
         }
         // Optimized ID: only includes playlist ID and search text, not count
         // This prevents full table rebuild on track additions/removals
-        .id("\(playlist?.id ?? "")-\(debouncedSearchText)")
+        .id("\(playlist?.id ?? "")-\(debouncedSearchText)-\(trackFilter.activeFilterCount)")
+        .safeAreaInset(edge: .top) {
+            HStack(spacing: 12) {
+                if trackFilter.isActive {
+                    HStack(spacing: 4) {
+                        Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                            .foregroundStyle(.blue)
+                        Text("\(trackFilter.activeFilterCount) filter\(trackFilter.activeFilterCount == 1 ? "" : "s") active")
+                            .font(.caption)
+                        Text("(\(sortedFilteredTracks.count) tracks)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            withAnimation { trackFilter.reset() }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if !sortOrder.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.arrow.down.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Sorted")
+                            .font(.caption)
+                        Button {
+                            withAnimation { sortOrder = [] }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Spacer()
+
+                Button {
+                    showFilterPopover.toggle()
+                } label: {
+                    Label("Filter", systemImage: trackFilter.isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(trackFilter.isActive ? .blue : .primary)
+                }
+                .buttonStyle(.borderless)
+                .help("Advanced filters")
+                .popover(isPresented: $showFilterPopover) {
+                    TrackFilterView(
+                        filter: $trackFilter,
+                        tracks: spotifyManager.currentPlaylistTracks
+                    )
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial)
+        }
         .onChange(of: searchText) { oldValue, newValue in
             // Debounce search input - wait 300ms before filtering
             searchDebounceTask?.cancel()
@@ -189,7 +275,22 @@ struct TrackContextMenu: View {
     let spotifyManager: SpotifyManager
     @Binding var showDeleteConfirmation: Bool
     let searchText: String
-    
+
+    /// Get the selected tracks
+    var selectedTracks: [SpotifyManager.Track] {
+        spotifyManager.currentPlaylistTracks.filter { items.contains($0.id) }
+    }
+
+    /// Count of unliked tracks in selection
+    var unlikedCount: Int {
+        selectedTracks.filter { !$0.isLiked }.count
+    }
+
+    /// Count of liked tracks in selection
+    var likedCount: Int {
+        selectedTracks.filter { $0.isLiked }.count
+    }
+
     var body: some View {
         if items.isEmpty {
             Text("No selection")
@@ -201,8 +302,35 @@ struct TrackContextMenu: View {
                 showDeleteConfirmation: $showDeleteConfirmation
             )
         } else {
-            Button("Delete \(items.count) tracks", role: .destructive) {
-                showDeleteConfirmation = true
+            // Multiple selection context menu
+            if unlikedCount > 0 {
+                Button {
+                    Task {
+                        let _ = await spotifyManager.bulkLikeTracks(selectedTracks)
+                    }
+                } label: {
+                    Label("Like \(unlikedCount) Track\(unlikedCount == 1 ? "" : "s")",
+                          systemImage: "heart")
+                }
+            }
+
+            if likedCount > 0 {
+                Button {
+                    Task {
+                        let _ = await spotifyManager.bulkUnlikeTracks(selectedTracks)
+                    }
+                } label: {
+                    Label("Unlike \(likedCount) Track\(likedCount == 1 ? "" : "s")",
+                          systemImage: "heart.slash")
+                }
+            }
+
+            Divider()
+
+            if let playlist = playlist, playlist.isEditable {
+                Button("Delete \(items.count) Track\(items.count == 1 ? "" : "s")", role: .destructive) {
+                    showDeleteConfirmation = true
+                }
             }
         }
     }

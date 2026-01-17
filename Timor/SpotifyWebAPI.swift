@@ -13,6 +13,145 @@ import AppKit
 import os.log
 import CryptoKit
 
+// MARK: - Rate Limiter
+
+/// Manages API rate limiting with exponential backoff and retry logic
+actor RateLimiter {
+    private var retryAfter: Date?
+    private var consecutiveFailures: Int = 0
+    private var lastRequestTime: Date?
+    private let minRequestInterval: TimeInterval = 0.1 // 100ms between requests (~10/sec max)
+    private let maxRetries: Int = 5
+    private let logger = Logger(subsystem: "com.timor.spotify", category: "RateLimiter")
+
+    /// Published state for UI feedback
+    @MainActor static var shared = RateLimiter()
+
+    /// Whether we're currently rate limited
+    var isRateLimited: Bool {
+        if let retryAfter = retryAfter {
+            return Date() < retryAfter
+        }
+        return false
+    }
+
+    /// Time remaining until rate limit expires
+    var rateLimitRemaining: TimeInterval? {
+        guard let retryAfter = retryAfter else { return nil }
+        let remaining = retryAfter.timeIntervalSince(Date())
+        return remaining > 0 ? remaining : nil
+    }
+
+    /// Wait for rate limit to expire and apply throttling
+    func waitIfNeeded() async throws {
+        // Check if we're rate limited
+        if let retryAfter = retryAfter {
+            let waitTime = retryAfter.timeIntervalSince(Date())
+            if waitTime > 0 {
+                logger.info("Rate limited, waiting \(waitTime, format: .fixed(precision: 1))s")
+                try await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
+            }
+            self.retryAfter = nil
+        }
+
+        // Apply minimum request interval to prevent hitting rate limits
+        if let lastRequest = lastRequestTime {
+            let elapsed = Date().timeIntervalSince(lastRequest)
+            if elapsed < minRequestInterval {
+                let delay = minRequestInterval - elapsed
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+
+        lastRequestTime = Date()
+    }
+
+    /// Handle a 429 response and calculate backoff
+    func handleRateLimit(retryAfterHeader: String?) {
+        consecutiveFailures += 1
+
+        // Parse Retry-After header (can be seconds or HTTP date)
+        var waitSeconds: TimeInterval = 1.0
+
+        if let header = retryAfterHeader {
+            if let seconds = TimeInterval(header) {
+                waitSeconds = seconds
+            } else {
+                // Try parsing as HTTP date
+                let formatter = DateFormatter()
+                formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+                if let date = formatter.date(from: header) {
+                    waitSeconds = max(1, date.timeIntervalSince(Date()))
+                }
+            }
+        }
+
+        // Apply exponential backoff for consecutive failures
+        let backoffMultiplier = pow(2.0, Double(min(consecutiveFailures - 1, 4)))
+        let totalWait = waitSeconds * backoffMultiplier
+
+        retryAfter = Date().addingTimeInterval(totalWait)
+        logger.warning("Rate limited! Waiting \(totalWait, format: .fixed(precision: 1))s (failure #\(self.consecutiveFailures))")
+    }
+
+    /// Reset failure count on successful request
+    func recordSuccess() {
+        consecutiveFailures = 0
+    }
+
+    /// Execute a request with automatic retry on rate limit
+    func executeWithRetry(
+        maxRetries: Int? = nil,
+        operation: @escaping () async throws -> (Data, URLResponse)
+    ) async throws -> (Data, URLResponse) {
+        let retries = maxRetries ?? self.maxRetries
+        var lastError: Error?
+
+        for attempt in 0..<retries {
+            do {
+                try await waitIfNeeded()
+
+                let (data, response) = try await operation()
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    return (data, response)
+                }
+
+                switch httpResponse.statusCode {
+                case 200...299:
+                    recordSuccess()
+                    return (data, response)
+
+                case 429:
+                    let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                    handleRateLimit(retryAfterHeader: retryAfter)
+                    logger.info("Rate limit hit on attempt \(attempt + 1)/\(retries)")
+                    continue
+
+                case 500...599:
+                    // Server error - retry with backoff
+                    consecutiveFailures += 1
+                    let backoff = pow(2.0, Double(min(attempt, 4)))
+                    try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                    continue
+
+                default:
+                    // Other errors - don't retry
+                    return (data, response)
+                }
+            } catch {
+                lastError = error
+                if attempt < retries - 1 {
+                    let backoff = pow(2.0, Double(min(attempt, 4)))
+                    try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                }
+            }
+        }
+
+        throw lastError ?? URLError(.timedOut)
+    }
+}
+
 // MARK: - Certificate Pinning Delegate
 private class PinnedURLSessionDelegate: NSObject, URLSessionDelegate {
     // Spotify API certificate public key hashes (SHA-256)
@@ -81,8 +220,11 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     @Published var accessToken: String?
     @Published var refreshToken: String?
     @Published var tokenExpiryDate: Date?
+    @Published var isRateLimited = false
+    @Published var rateLimitSecondsRemaining: Int = 0
 
     private let keychain = KeychainManager.shared
+    private let rateLimiter = RateLimiter()
     private var authSession: ASWebAuthenticationSession?
     private var currentUserId: String?
     private var tokenRefreshTimer: Timer?
@@ -140,6 +282,26 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         credentials.resetBytes(in: 0..<credentials.count)
 
         return "Basic \(base64)"
+    }
+
+    // MARK: - Rate-Limited Request Helper
+
+    /// Executes an API request with automatic rate limiting and retry logic
+    private func rateLimitedRequest(for request: URLRequest) async throws -> (Data, URLResponse) {
+        return try await rateLimiter.executeWithRetry {
+            try await self.pinnedSession.data(for: request)
+        }
+    }
+
+    /// Updates the rate limit UI state
+    private func updateRateLimitStatus() async {
+        let isLimited = await rateLimiter.isRateLimited
+        let remaining = await rateLimiter.rateLimitRemaining
+
+        await MainActor.run {
+            self.isRateLimited = isLimited
+            self.rateLimitSecondsRemaining = remaining.map { Int(ceil($0)) } ?? 0
+        }
     }
 
     var redirectURI: String {
@@ -304,7 +466,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             .data(using: .utf8)
 
         do {
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 Self.logger.error("Invalid response type from token endpoint")
@@ -359,7 +521,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             .data(using: .utf8)
 
         do {
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
@@ -401,7 +563,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, _) = try await pinnedSession.data(for: request)
+            let (data, _) = try await rateLimitedRequest(for: request)
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let userId = json["id"] as? String {
                 currentUserId = userId
@@ -427,7 +589,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                 // Token expired, try to refresh
@@ -473,7 +635,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
             do {
-                let (data, response) = try await pinnedSession.data(for: request)
+                let (data, response) = try await rateLimitedRequest(for: request)
+                await updateRateLimitStatus()
 
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                     // Token expired, try to refresh
@@ -519,10 +682,11 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 hasMore = tracksResponse.next != nil
                 offset += limit
 
-                print("Fetched \(allTracks.count) tracks so far...")
+                Self.logger.debug("Fetched \(allTracks.count) tracks so far...")
 
             } catch {
-                print("Error fetching playlist tracks at offset \(offset): \(error)")
+                Self.logger.error("Error fetching playlist tracks at offset \(offset): \(error.localizedDescription, privacy: .public)")
+                await updateRateLimitStatus()
                 break
             }
         }
@@ -608,7 +772,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             // Log the raw response
             if let responseString = String(data: data, encoding: .utf8) {
@@ -694,7 +858,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -785,7 +949,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -822,7 +986,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -864,7 +1028,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await pinnedSession.data(for: request)
+            let (_, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -899,7 +1063,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (_, response) = try await pinnedSession.data(for: request)
+            let (_, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -949,7 +1113,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await pinnedSession.data(for: request)
+            let (data, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -995,7 +1159,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await pinnedSession.data(for: request)
+            let (_, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -1044,7 +1208,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await pinnedSession.data(for: request)
+            let (_, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -1088,7 +1252,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await pinnedSession.data(for: request)
+            let (_, response) = try await rateLimitedRequest(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -1136,7 +1300,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
             do {
                 request.httpBody = try JSONSerialization.data(withJSONObject: body)
-                let (_, response) = try await pinnedSession.data(for: request)
+                let (_, response) = try await rateLimitedRequest(for: request)
 
                 if let httpResponse = response as? HTTPURLResponse {
                     if httpResponse.statusCode == 401 {

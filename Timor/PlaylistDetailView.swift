@@ -21,6 +21,7 @@ struct PlaylistDetailView: View {
     @Binding var showInspector: Bool
     @Binding var showDuplicateFinder: Bool
     @Binding var showImport: Bool
+    @Binding var showStats: Bool
     
     var filteredTracks: [SpotifyManager.Track] {
         if searchText.isEmpty {
@@ -81,7 +82,8 @@ struct PlaylistDetailView: View {
                 showInspector: $showInspector,
                 selectedTrack: $selectedTrack,
                 showDuplicateFinder: $showDuplicateFinder,
-                showImport: $showImport
+                showImport: $showImport,
+                showStats: $showStats
             )
         }
     }
@@ -199,6 +201,7 @@ struct PlaylistToolbar: ToolbarContent {
     @Binding var selectedTrack: SpotifyManager.Track?
     @Binding var showDuplicateFinder: Bool
     @Binding var showImport: Bool
+    @Binding var showStats: Bool
 
     var body: some ToolbarContent {
         // Undo/Redo buttons
@@ -271,6 +274,13 @@ struct PlaylistToolbar: ToolbarContent {
                 .help("Refresh tracks from Spotify")
 
                 if !spotifyManager.currentPlaylistTracks.isEmpty {
+                    Button {
+                        showStats = true
+                    } label: {
+                        Label("Stats", systemImage: "chart.bar.xaxis")
+                    }
+                    .help("View playlist statistics")
+
                     Button {
                         showDuplicateFinder = true
                     } label: {
