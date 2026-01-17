@@ -15,14 +15,30 @@ struct PlaylistSidebarView: View {
     @Binding var selectedTracks: Set<SpotifyManager.Track.ID>
     @Binding var showOnlyEditablePlaylists: Bool
     @Binding var showCreatePlaylist: Bool
-    
+
+    @State private var showCreateFolder = false
+    @State private var newFolderName = ""
+    @State private var folderToRename: PlaylistFolder?
+    @State private var renameFolderText = ""
+
     var filteredPlaylists: [SpotifyManager.Playlist] {
         if showOnlyEditablePlaylists {
             return spotifyManager.playlists.filter { $0.isEditable }
         }
         return spotifyManager.playlists
     }
-    
+
+    /// Returns filtered playlists not in any folder
+    var uncategorizedPlaylists: [SpotifyManager.Playlist] {
+        let folderPlaylistIds = Set(spotifyManager.folders.flatMap { $0.playlistIds })
+        return filteredPlaylists.filter { !folderPlaylistIds.contains($0.id) }
+    }
+
+    /// Returns playlists for a specific folder (filtered)
+    func playlistsInFolder(_ folder: PlaylistFolder) -> [SpotifyManager.Playlist] {
+        filteredPlaylists.filter { folder.containsPlaylist($0.id) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -34,64 +50,83 @@ struct PlaylistSidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            
+
             // Playlists List
             List {
                 if spotifyManager.isAuthenticated {
                     // Liked Songs special item
-                    Button {
-                        selectedPlaylist = nil
-                        spotifyManager.selectedPlaylist = nil
-                        spotifyManager.isViewingLikedSongs = true
-                        searchText = ""
-                        selectedTracks = []
-                        isViewingLikedSongs = true
-                        spotifyManager.fetchLikedSongs()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                HStack {
-                                    Image(systemName: "heart.fill")
-                                        .foregroundColor(.red)
-                                    Text("Liked Songs")
-                                        .font(.headline)
-                                }
-                                Text("Your liked tracks")
+                    LikedSongsRow(
+                        isViewingLikedSongs: isViewingLikedSongs,
+                        onSelect: {
+                            selectedPlaylist = nil
+                            spotifyManager.selectedPlaylist = nil
+                            spotifyManager.isViewingLikedSongs = true
+                            searchText = ""
+                            selectedTracks = []
+                            isViewingLikedSongs = true
+                            spotifyManager.fetchLikedSongs()
+                        }
+                    )
+
+                    Divider()
+
+                    // Folders with playlists
+                    ForEach(spotifyManager.folders) { folder in
+                        FolderSection(
+                            folder: folder,
+                            playlists: playlistsInFolder(folder),
+                            selectedPlaylist: selectedPlaylist,
+                            currentPlaylistId: selectedPlaylist?.id,
+                            onSelectPlaylist: { playlist in
+                                selectPlaylist(playlist)
+                            },
+                            onRenameFolder: {
+                                folderToRename = folder
+                                renameFolderText = folder.name
+                            },
+                            onDeleteFolder: {
+                                spotifyManager.deleteFolder(folder)
+                            },
+                            onToggleExpand: {
+                                spotifyManager.toggleFolderExpansion(folder)
+                            },
+                            spotifyManager: spotifyManager
+                        )
+                    }
+
+                    // Uncategorized playlists
+                    if !uncategorizedPlaylists.isEmpty {
+                        Section {
+                            ForEach(uncategorizedPlaylists) { playlist in
+                                PlaylistRow(
+                                    playlist: playlist,
+                                    isSelected: selectedPlaylist?.id == playlist.id,
+                                    currentPlaylistId: selectedPlaylist?.id,
+                                    onSelect: {
+                                        selectPlaylist(playlist)
+                                    },
+                                    spotifyManager: spotifyManager
+                                )
+                            }
+                        } header: {
+                            if !spotifyManager.folders.isEmpty {
+                                Text("Uncategorized")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Spacer()
                         }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(isViewingLikedSongs ? Color.accentColor.opacity(0.1) : Color.clear)
-                    
-                    Divider()
-                    
-                    ForEach(filteredPlaylists) { playlist in
-                        PlaylistRow(
-                            playlist: playlist,
-                            isSelected: selectedPlaylist?.id == playlist.id,
-                            onSelect: {
-                                selectedPlaylist = playlist
-                                spotifyManager.selectedPlaylist = playlist
-                                spotifyManager.isViewingLikedSongs = false
-                                searchText = ""
-                                selectedTracks = []
-                                isViewingLikedSongs = false
-                                spotifyManager.fetchTracksForPlaylist(playlist.id)
-                            }
-                        )
                     }
                 } else {
                     EmptyPlaylistsView()
                 }
             }
             .listStyle(.sidebar)
-            
+            .onAppear {
+                spotifyManager.fetchFolders()
+            }
+
             Divider()
-            
+
             // Bottom controls
             SpotifyControlsView(
                 spotifyManager: spotifyManager,
@@ -101,12 +136,162 @@ struct PlaylistSidebarView: View {
         .navigationSplitViewColumnWidth(min: 250, ideal: 300)
         .toolbar {
             if spotifyManager.isAuthenticated {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button(action: { showCreateFolder = true }) {
+                        Label("New Folder", systemImage: "folder.badge.plus")
+                    }
+                    .help("Create a new folder")
+
                     Button(action: { showCreatePlaylist = true }) {
                         Label("Create Playlist", systemImage: "text.badge.plus")
                     }
                     .help("Create a new Spotify playlist")
                 }
+            }
+        }
+        .sheet(isPresented: $showCreateFolder) {
+            CreateFolderSheet(
+                folderName: $newFolderName,
+                isPresented: $showCreateFolder,
+                onCreate: {
+                    if !newFolderName.isEmpty {
+                        _ = spotifyManager.createFolder(name: newFolderName)
+                        newFolderName = ""
+                    }
+                }
+            )
+        }
+        .sheet(item: $folderToRename) { folder in
+            RenameFolderSheet(
+                folder: folder,
+                folderName: $renameFolderText,
+                onRename: {
+                    spotifyManager.renameFolder(folder, newName: renameFolderText)
+                    folderToRename = nil
+                },
+                onCancel: {
+                    folderToRename = nil
+                }
+            )
+        }
+    }
+
+    private func selectPlaylist(_ playlist: SpotifyManager.Playlist) {
+        selectedPlaylist = playlist
+        spotifyManager.selectedPlaylist = playlist
+        spotifyManager.isViewingLikedSongs = false
+        searchText = ""
+        selectedTracks = []
+        isViewingLikedSongs = false
+        spotifyManager.fetchTracksForPlaylist(playlist.id)
+    }
+}
+
+// MARK: - Liked Songs Row
+
+struct LikedSongsRow: View {
+    let isViewingLikedSongs: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack {
+                VStack(alignment: .leading) {
+                    HStack {
+                        Image(systemName: "heart.fill")
+                            .foregroundColor(.red)
+                        Text("Liked Songs")
+                            .font(.headline)
+                    }
+                    Text("Your liked tracks")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(isViewingLikedSongs ? Color.accentColor.opacity(0.1) : Color.clear)
+    }
+}
+
+// MARK: - Folder Section
+
+struct FolderSection: View {
+    let folder: PlaylistFolder
+    let playlists: [SpotifyManager.Playlist]
+    let selectedPlaylist: SpotifyManager.Playlist?
+    let currentPlaylistId: String?
+    let onSelectPlaylist: (SpotifyManager.Playlist) -> Void
+    let onRenameFolder: () -> Void
+    let onDeleteFolder: () -> Void
+    let onToggleExpand: () -> Void
+    let spotifyManager: SpotifyManager
+
+    @State private var isFolderDropTargeted = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { folder.isExpanded },
+            set: { _ in onToggleExpand() }
+        )) {
+            ForEach(playlists) { playlist in
+                PlaylistRow(
+                    playlist: playlist,
+                    isSelected: selectedPlaylist?.id == playlist.id,
+                    currentPlaylistId: currentPlaylistId,
+                    onSelect: {
+                        onSelectPlaylist(playlist)
+                    },
+                    spotifyManager: spotifyManager
+                )
+            }
+        } label: {
+            HStack {
+                Image(systemName: folder.isExpanded ? "folder.fill" : "folder")
+                    .foregroundStyle(.secondary)
+                Text(folder.name)
+                    .font(.headline)
+                Spacer()
+                Text("\(playlists.count)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                if isFolderDropTargeted {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .listRowBackground(isFolderDropTargeted ? Color.blue.opacity(0.2) : Color.clear)
+        .onDrop(of: ["xsf.welshofer.Timor.playlist"], isTargeted: $isFolderDropTargeted) { providers in
+            guard let provider = providers.first else { return false }
+
+            provider.loadDataRepresentation(forTypeIdentifier: "xsf.welshofer.Timor.playlist") { data, _ in
+                guard let data = data,
+                      let playlistId = String(data: data, encoding: .utf8) else { return }
+
+                Task { @MainActor in
+                    spotifyManager.addPlaylistToFolder(playlistId, folder: folder)
+                }
+            }
+            return true
+        }
+        .contextMenu {
+            Button {
+                onRenameFolder()
+            } label: {
+                Label("Rename Folder", systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                onDeleteFolder()
+            } label: {
+                Label("Delete Folder", systemImage: "trash")
             }
         }
     }
@@ -115,8 +300,20 @@ struct PlaylistSidebarView: View {
 struct PlaylistRow: View {
     let playlist: SpotifyManager.Playlist
     let isSelected: Bool
+    let currentPlaylistId: String?
     let onSelect: () -> Void
-    
+    let spotifyManager: SpotifyManager
+
+    @State private var isDropTargeted = false
+
+    init(playlist: SpotifyManager.Playlist, isSelected: Bool, currentPlaylistId: String? = nil, onSelect: @escaping () -> Void, spotifyManager: SpotifyManager) {
+        self.playlist = playlist
+        self.isSelected = isSelected
+        self.currentPlaylistId = currentPlaylistId
+        self.onSelect = onSelect
+        self.spotifyManager = spotifyManager
+    }
+
     var body: some View {
         Button(action: onSelect) {
             HStack {
@@ -135,12 +332,99 @@ struct PlaylistRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+
+                // Drop indicator
+                if isDropTargeted && playlist.isEditable {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.green)
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+        .listRowBackground(
+            isDropTargeted && playlist.isEditable
+                ? Color.green.opacity(0.2)
+                : (isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+        )
+        .onDrag {
+            // Make playlists draggable into folders
+            let provider = NSItemProvider()
+            if let data = playlist.id.data(using: .utf8) {
+                provider.registerDataRepresentation(
+                    forTypeIdentifier: "xsf.welshofer.Timor.playlist",
+                    visibility: .all
+                ) { completion in
+                    completion(data, nil)
+                    return nil
+                }
+            }
+            return provider
+        }
+        .onDrop(of: ["xsf.welshofer.Timor.spotifytrack"], isTargeted: Binding(
+            get: { isDropTargeted },
+            set: { targeted in
+                isDropTargeted = targeted && playlist.isEditable && playlist.id != currentPlaylistId
+            }
+        )) { providers in
+            // Don't allow dropping on the same playlist or non-editable playlists
+            guard playlist.id != currentPlaylistId, playlist.isEditable else {
+                return false
+            }
+
+            // Load tracks from the first provider
+            guard let provider = providers.first else { return false }
+
+            provider.loadDataRepresentation(forTypeIdentifier: "xsf.welshofer.Timor.spotifytrack") { data, error in
+                guard let data = data else {
+                    print("Drop failed: \(error?.localizedDescription ?? "No data")")
+                    return
+                }
+
+                let decoder = JSONDecoder()
+                // Try decoding as array first, then single track
+                if let tracks = try? decoder.decode([SpotifyManager.Track].self, from: data) {
+                    Task { @MainActor in
+                        await SpotifyManager.shared.addTracksToPlaylist(
+                            playlist.id,
+                            tracks: tracks
+                        )
+                    }
+                } else if let track = try? decoder.decode(SpotifyManager.Track.self, from: data) {
+                    Task { @MainActor in
+                        await SpotifyManager.shared.addTracksToPlaylist(
+                            playlist.id,
+                            tracks: [track]
+                        )
+                    }
+                }
+            }
+            return true
+        }
         .contextMenu {
+            // Folder menu
+            if !spotifyManager.folders.isEmpty {
+                Menu("Move to Folder") {
+                    ForEach(spotifyManager.folders) { folder in
+                        Button {
+                            spotifyManager.addPlaylistToFolder(playlist.id, folder: folder)
+                        } label: {
+                            Label(folder.name, systemImage: "folder")
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        spotifyManager.removePlaylistFromFolder(playlist.id)
+                    } label: {
+                        Label("Remove from Folder", systemImage: "folder.badge.minus")
+                    }
+                }
+
+                Divider()
+            }
+
             if playlist.isEditable {
                 Button(role: .destructive) {
                     deletePlaylist(playlist)
@@ -150,7 +434,7 @@ struct PlaylistRow: View {
             }
         }
     }
-    
+
     private func deletePlaylist(_ playlist: SpotifyManager.Playlist) {
         Task {
             let alert = NSAlert()
@@ -159,7 +443,7 @@ struct PlaylistRow: View {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Delete")
             alert.addButton(withTitle: "Cancel")
-            
+
             if alert.runModal() == .alertFirstButtonReturn {
                 let success = await SpotifyManager.shared.deletePlaylist(playlist.id)
                 if !success {
@@ -249,5 +533,78 @@ struct SpotifyControlsView: View {
         }
         .padding(12)
         .background(Color(NSColor.controlBackgroundColor))
+    }
+}
+
+// MARK: - Create Folder Sheet
+
+struct CreateFolderSheet: View {
+    @Binding var folderName: String
+    @Binding var isPresented: Bool
+    let onCreate: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Create New Folder")
+                .font(.headline)
+
+            TextField("Folder Name", text: $folderName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 250)
+
+            HStack {
+                Button("Cancel") {
+                    folderName = ""
+                    isPresented = false
+                }
+                .keyboardShortcut(.escape)
+
+                Button("Create") {
+                    onCreate()
+                    isPresented = false
+                }
+                .keyboardShortcut(.return)
+                .disabled(folderName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 300)
+    }
+}
+
+// MARK: - Rename Folder Sheet
+
+struct RenameFolderSheet: View {
+    let folder: PlaylistFolder
+    @Binding var folderName: String
+    let onRename: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Rename Folder")
+                .font(.headline)
+
+            TextField("Folder Name", text: $folderName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 250)
+
+            HStack {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.escape)
+
+                Button("Rename") {
+                    onRename()
+                }
+                .keyboardShortcut(.return)
+                .disabled(folderName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 300)
     }
 }
