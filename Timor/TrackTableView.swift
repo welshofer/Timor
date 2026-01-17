@@ -66,6 +66,11 @@ struct TrackTableView: View {
         )
     }
     
+    /// Tracks that are currently selected (for drag & drop)
+    var selectedTrackObjects: [SpotifyManager.Track] {
+        filteredTracks.filter { selectedTracks.contains($0.id) }
+    }
+
     var body: some View {
         Table(filteredTracks, selection: safeSelection) {
             TableColumn("Title", value: \.name)
@@ -82,6 +87,28 @@ struct TrackTableView: View {
                 LikeButton(track: track, spotifyManager: spotifyManager)
             }
             .width(30)
+        }
+        .onDrag {
+            // Create an NSItemProvider with the selected tracks
+            let tracks = selectedTrackObjects
+            guard !tracks.isEmpty else {
+                return NSItemProvider()
+            }
+
+            // Encode tracks as JSON data
+            let encoder = JSONEncoder()
+            if let data = try? encoder.encode(tracks) {
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(
+                    forTypeIdentifier: "xsf.welshofer.Timor.spotifytrack",
+                    visibility: .all
+                ) { completion in
+                    completion(data, nil)
+                    return nil
+                }
+                return provider
+            }
+            return NSItemProvider()
         }
         .contextMenu(forSelectionType: SpotifyManager.Track.ID.self) { items in
             TrackContextMenu(

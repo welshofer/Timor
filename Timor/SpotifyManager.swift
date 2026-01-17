@@ -53,6 +53,9 @@ class SpotifyManager: ObservableObject {
     @Published var isUsingCache = false
     @Published var modelContainerFailed = false
 
+    /// Undo manager for playlist operations
+    let playlistUndoManager = PlaylistUndoManager()
+
     private let keychain = KeychainManager.shared
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
@@ -100,7 +103,8 @@ class SpotifyManager: ObservableObject {
         do {
             let schema = Schema([
                 CachedPlaylist.self,
-                CachedTrack.self
+                CachedTrack.self,
+                PlaylistFolder.self
             ])
             // Use a separate store file to avoid conflicts with existing Item model
             let url = URL.applicationSupportDirectory.appending(path: Constants.Cache.cacheStoreFileName)
@@ -127,7 +131,8 @@ class SpotifyManager: ObservableObject {
         do {
             let schema = Schema([
                 CachedPlaylist.self,
-                CachedTrack.self
+                CachedTrack.self,
+                PlaylistFolder.self
             ])
             let url = URL.applicationSupportDirectory.appending(path: Constants.Cache.cacheStoreFileName)
 
@@ -551,6 +556,9 @@ class SpotifyManager: ObservableObject {
         // Cancel any existing fetch operation
         fetchTask?.cancel()
 
+        // Update undo context for the new playlist
+        playlistUndoManager.setPlaylist(playlistId)
+
         // Create atomic load operation for race condition prevention
         let operation = PlaylistLoadOperation(id: UUID(), playlistId: playlistId, startTime: Date())
         currentLoadOperation = operation
@@ -870,17 +878,22 @@ class SpotifyManager: ObservableObject {
     }
 
     func deleteTracksFromPlaylist(_ playlistId: String, tracks: Set<Track>) async -> Bool {
-        // Group tracks by URI and collect their positions
+        // Capture tracks with their positions BEFORE deletion for undo
+        var deletedTracksWithPositions: [(track: Track, position: Int)] = []
         var trackPositions: [String: [Int]] = [:]
 
         for (index, track) in currentPlaylistTracks.enumerated() {
             if tracks.contains(where: { $0.id == track.id }) {
+                deletedTracksWithPositions.append((track: track, position: index))
                 if trackPositions[track.uri] == nil {
                     trackPositions[track.uri] = []
                 }
                 trackPositions[track.uri]?.append(index)
             }
         }
+
+        // Sort by position for proper restoration order
+        deletedTracksWithPositions.sort { $0.position < $1.position }
 
         // Prepare arrays for the API call
         let trackUris = Array(trackPositions.keys)
@@ -905,6 +918,56 @@ class SpotifyManager: ObservableObject {
 
             // Update cache with the modified playlist
             await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
+
+            // Register undo action
+            playlistUndoManager.registerTrackDeletion(
+                playlistId: playlistId,
+                deletedTracks: deletedTracksWithPositions
+            ) { [weak self] pid, tracksToRestore in
+                guard let self = self else { return false }
+                return await self.restoreDeletedTracks(playlistId: pid, tracks: tracksToRestore)
+            }
+        }
+
+        return success
+    }
+
+    /// Adds tracks to a playlist (used for drag & drop between playlists)
+    func addTracksToPlaylist(_ playlistId: String, tracks: [Track]) async -> Bool {
+        guard !tracks.isEmpty else { return false }
+
+        let uris = tracks.map { $0.uri }
+        let success = await SpotifyWebAPI.shared.addTracksToPlaylist(
+            playlistId: playlistId,
+            trackUris: uris
+        )
+
+        if success {
+            // Update the playlist track count in the sidebar
+            updatePlaylistTrackCount(playlistId, addedCount: tracks.count)
+        }
+
+        return success
+    }
+
+    /// Restores previously deleted tracks at their original positions
+    private func restoreDeletedTracks(playlistId: String, tracks: [(track: Track, position: Int)]) async -> Bool {
+        guard selectedPlaylist?.id == playlistId else {
+            Self.logger.warning("Cannot restore tracks: playlist changed")
+            return false
+        }
+
+        // Add tracks back via API
+        let uris = tracks.map { $0.track.uri }
+        let success = await SpotifyWebAPI.shared.addTracksToPlaylist(
+            playlistId: playlistId,
+            trackUris: uris
+        )
+
+        if success {
+            // Refresh the playlist to get the restored tracks
+            fetchTracksForPlaylist(playlistId, forceRefresh: true)
+            updatePlaylistTrackCount(playlistId, addedCount: tracks.count)
         }
 
         return success
@@ -1004,12 +1067,21 @@ class SpotifyManager: ObservableObject {
 
             if success {
                 // Update cache with the modified playlist
-            await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
+                await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
 
                 // Final verification
                 let finalCount = self.currentPlaylistTracks.count
                 if finalCount != originalCount {
                     print("WARNING: Track count changed after shuffle! Expected: \(originalCount), Got: \(finalCount)")
+                }
+
+                // Register undo action to restore original order
+                self.playlistUndoManager.registerShuffle(
+                    playlistId: playlistId,
+                    originalTracks: originalTracks
+                ) { [weak self] pid, tracksToRestore in
+                    guard let self = self else { return false }
+                    return await self.restoreTrackOrder(playlistId: pid, tracks: tracksToRestore)
                 }
             } else {
                 // Revert to original tracks if failed
@@ -1023,7 +1095,31 @@ class SpotifyManager: ObservableObject {
         return await task.value
     }
 
+    /// Restores tracks to a specific order (used for undo shuffle/reorder)
+    private func restoreTrackOrder(playlistId: String, tracks: [Track]) async -> Bool {
+        guard selectedPlaylist?.id == playlistId else {
+            Self.logger.warning("Cannot restore track order: playlist changed")
+            return false
+        }
+
+        let trackUris = tracks.map { $0.uri }
+        let success = await SpotifyWebAPI.shared.replacePlaylistTracks(
+            playlistId: playlistId,
+            trackUris: trackUris
+        )
+
+        if success {
+            currentPlaylistTracks = tracks
+            await cachePlaylistTracks(playlistId: playlistId, tracks: tracks)
+        }
+
+        return success
+    }
+
     func reorderTracks(in playlistId: String, from source: IndexSet, to destination: Int) async {
+        // Save original order for undo BEFORE modifying
+        let originalTracks = currentPlaylistTracks
+
         // Convert indices to track positions
         var tracks = currentPlaylistTracks
 
@@ -1053,6 +1149,15 @@ class SpotifyManager: ObservableObject {
         if success {
             // Update cache with the modified playlist
             await cachePlaylistTracks(playlistId: playlistId, tracks: currentPlaylistTracks)
+
+            // Register undo action to restore original order
+            playlistUndoManager.registerReorder(
+                playlistId: playlistId,
+                originalTracks: originalTracks
+            ) { [weak self] pid, tracksToRestore in
+                guard let self = self else { return false }
+                return await self.restoreTrackOrder(playlistId: pid, tracks: tracksToRestore)
+            }
         } else {
             // Revert on failure
             fetchTracksForPlaylist(playlistId)
@@ -1123,6 +1228,142 @@ class SpotifyManager: ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Playlist Folders
+
+    /// Published property for folders
+    @Published var folders: [PlaylistFolder] = []
+
+    /// Fetches all folders from the local store
+    func fetchFolders() {
+        guard let modelContext = modelContext else { return }
+
+        let descriptor = FetchDescriptor<PlaylistFolder>(
+            sortBy: [SortDescriptor(\.sortOrder)]
+        )
+
+        do {
+            folders = try modelContext.fetch(descriptor)
+            Self.logger.info("Fetched \(self.folders.count) folders")
+        } catch {
+            Self.logger.error("Failed to fetch folders: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Creates a new folder
+    func createFolder(name: String) -> PlaylistFolder? {
+        guard let modelContext = modelContext else { return nil }
+
+        let maxSortOrder = folders.map { $0.sortOrder }.max() ?? -1
+        let folder = PlaylistFolder(name: name, sortOrder: maxSortOrder + 1)
+
+        modelContext.insert(folder)
+
+        do {
+            try modelContext.save()
+            fetchFolders()
+            Self.logger.info("Created folder: \(name, privacy: .public)")
+            return folder
+        } catch {
+            Self.logger.error("Failed to create folder: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Renames a folder
+    func renameFolder(_ folder: PlaylistFolder, newName: String) {
+        guard let modelContext = modelContext else { return }
+
+        folder.name = newName
+
+        do {
+            try modelContext.save()
+            fetchFolders()
+            Self.logger.info("Renamed folder to: \(newName, privacy: .public)")
+        } catch {
+            Self.logger.error("Failed to rename folder: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Deletes a folder (playlists become uncategorized)
+    func deleteFolder(_ folder: PlaylistFolder) {
+        guard let modelContext = modelContext else { return }
+
+        modelContext.delete(folder)
+
+        do {
+            try modelContext.save()
+            fetchFolders()
+            Self.logger.info("Deleted folder")
+        } catch {
+            Self.logger.error("Failed to delete folder: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Adds a playlist to a folder
+    func addPlaylistToFolder(_ playlistId: String, folder: PlaylistFolder) {
+        guard let modelContext = modelContext else { return }
+
+        // Remove from any existing folder first
+        for existingFolder in folders {
+            existingFolder.removePlaylist(playlistId)
+        }
+
+        folder.addPlaylist(playlistId)
+
+        do {
+            try modelContext.save()
+            fetchFolders()
+            Self.logger.info("Added playlist \(playlistId, privacy: .public) to folder \(folder.name, privacy: .public)")
+        } catch {
+            Self.logger.error("Failed to add playlist to folder: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Removes a playlist from its folder
+    func removePlaylistFromFolder(_ playlistId: String) {
+        guard let modelContext = modelContext else { return }
+
+        for folder in folders {
+            folder.removePlaylist(playlistId)
+        }
+
+        do {
+            try modelContext.save()
+            fetchFolders()
+            Self.logger.info("Removed playlist \(playlistId, privacy: .public) from folders")
+        } catch {
+            Self.logger.error("Failed to remove playlist from folder: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Returns the folder containing a playlist, if any
+    func folderForPlaylist(_ playlistId: String) -> PlaylistFolder? {
+        folders.first { $0.containsPlaylist(playlistId) }
+    }
+
+    /// Returns playlists not in any folder
+    func uncategorizedPlaylists() -> [Playlist] {
+        let folderPlaylistIds = Set(folders.flatMap { $0.playlistIds })
+        return playlists.filter { !folderPlaylistIds.contains($0.id) }
+    }
+
+    /// Toggles folder expansion state
+    func toggleFolderExpansion(_ folder: PlaylistFolder) {
+        guard let modelContext = modelContext else { return }
+
+        folder.isExpanded.toggle()
+
+        do {
+            try modelContext.save()
+            // Don't need to refetch, just update the local state
+            if let index = folders.firstIndex(where: { $0.id == folder.id }) {
+                folders[index].isExpanded = folder.isExpanded
+            }
+        } catch {
+            Self.logger.error("Failed to toggle folder expansion: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

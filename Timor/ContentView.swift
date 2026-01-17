@@ -27,6 +27,8 @@ struct ContentView: View {
     @State private var isCreatingPlaylist = false
     @State private var showInspector = false
     @State private var selectedTrack: SpotifyManager.Track?
+    @State private var showDuplicateFinder = false
+    @State private var showImport = false
     
     var body: some View {
         NavigationSplitView {
@@ -52,7 +54,9 @@ struct ContentView: View {
                     showShuffleAlert: $showShuffleAlert,
                     shuffleResult: $shuffleResult,
                     selectedTrack: $selectedTrack,
-                    showInspector: $showInspector
+                    showInspector: $showInspector,
+                    showDuplicateFinder: $showDuplicateFinder,
+                    showImport: $showImport
                 )
             } else {
                 EmptyDetailView()
@@ -83,6 +87,22 @@ struct ContentView: View {
                 spotifyManager: spotifyManager,
                 selectedPlaylist: $selectedPlaylist
             )
+        }
+        .sheet(isPresented: $showDuplicateFinder) {
+            DuplicateFinderView(
+                spotifyManager: spotifyManager,
+                playlist: selectedPlaylist,
+                isPresented: $showDuplicateFinder
+            )
+        }
+        .sheet(isPresented: $showImport) {
+            if let playlist = selectedPlaylist {
+                ImportView(
+                    spotifyManager: spotifyManager,
+                    playlist: playlist,
+                    isPresented: $showImport
+                )
+            }
         }
         .alert("Playlist Shuffle", isPresented: $showShuffleAlert) {
             Button("OK") { }

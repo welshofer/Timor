@@ -19,6 +19,8 @@ struct PlaylistDetailView: View {
     @Binding var shuffleResult: Bool
     @Binding var selectedTrack: SpotifyManager.Track?
     @Binding var showInspector: Bool
+    @Binding var showDuplicateFinder: Bool
+    @Binding var showImport: Bool
     
     var filteredTracks: [SpotifyManager.Track] {
         if searchText.isEmpty {
@@ -77,7 +79,9 @@ struct PlaylistDetailView: View {
                 shuffleResult: $shuffleResult,
                 searchText: $searchText,
                 showInspector: $showInspector,
-                selectedTrack: $selectedTrack
+                selectedTrack: $selectedTrack,
+                showDuplicateFinder: $showDuplicateFinder,
+                showImport: $showImport
             )
         }
     }
@@ -193,8 +197,31 @@ struct PlaylistToolbar: ToolbarContent {
     @Binding var searchText: String
     @Binding var showInspector: Bool
     @Binding var selectedTrack: SpotifyManager.Track?
-    
+    @Binding var showDuplicateFinder: Bool
+    @Binding var showImport: Bool
+
     var body: some ToolbarContent {
+        // Undo/Redo buttons
+        ToolbarItemGroup(placement: .navigation) {
+            Button {
+                spotifyManager.playlistUndoManager.undo()
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+            }
+            .disabled(!spotifyManager.playlistUndoManager.canUndo || spotifyManager.playlistUndoManager.isUndoRedoInProgress)
+            .help(spotifyManager.playlistUndoManager.undoActionName.map { "Undo \($0)" } ?? "Undo")
+            .keyboardShortcut("z", modifiers: .command)
+
+            Button {
+                spotifyManager.playlistUndoManager.redo()
+            } label: {
+                Label("Redo", systemImage: "arrow.uturn.forward")
+            }
+            .disabled(!spotifyManager.playlistUndoManager.canRedo || spotifyManager.playlistUndoManager.isUndoRedoInProgress)
+            .help(spotifyManager.playlistUndoManager.redoActionName.map { "Redo \($0)" } ?? "Redo")
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+
         // Main action buttons group
         ToolbarItemGroup(placement: .primaryAction) {
 
@@ -206,6 +233,13 @@ struct PlaylistToolbar: ToolbarContent {
                         Label("Add Tracks", systemImage: "plus.square.fill.on.square.fill")
                     }
                     .help("Search and add tracks to this playlist")
+
+                    Button {
+                        showImport = true
+                    } label: {
+                        Label("Import", systemImage: "square.and.arrow.up")
+                    }
+                    .help("Import tracks from CSV or URLs")
                 }
                 if selectedPlaylist?.isEditable ?? false {
                     Button {
@@ -237,6 +271,13 @@ struct PlaylistToolbar: ToolbarContent {
                 .help("Refresh tracks from Spotify")
 
                 if !spotifyManager.currentPlaylistTracks.isEmpty {
+                    Button {
+                        showDuplicateFinder = true
+                    } label: {
+                        Label("Duplicates", systemImage: "doc.on.doc")
+                    }
+                    .help("Find and remove duplicate tracks")
+
                     Button {
                         let playlistName = selectedPlaylist?.name ?? "Liked Songs"
                         spotifyManager.exportPlaylistToCSV(playlistName: playlistName)
