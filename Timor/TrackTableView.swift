@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 struct TrackTableView: View {
     @ObservedObject var spotifyManager: SpotifyManager
@@ -14,13 +15,29 @@ struct TrackTableView: View {
     @Binding var searchText: String
     @Binding var showDeleteConfirmation: Bool
     @Binding var selectedTrack: SpotifyManager.Track?
-    
+
+    // Debounced search for performance
+    @State private var debouncedSearchText: String = ""
+    @State private var searchDebounceTask: Task<Void, Never>?
+
+    // Cached filtered results to avoid recomputation
+    @State private var cachedFilteredTracks: [SpotifyManager.Track] = []
+    @State private var lastTrackCount: Int = 0
+    @State private var lastSearchText: String = ""
+
     var filteredTracks: [SpotifyManager.Track] {
-        if searchText.isEmpty {
+        // Use cached results if inputs haven't changed
+        let currentTrackCount = spotifyManager.currentPlaylistTracks.count
+        if debouncedSearchText == lastSearchText && currentTrackCount == lastTrackCount {
+            return cachedFilteredTracks
+        }
+
+        // Recompute filter
+        if debouncedSearchText.isEmpty {
             return spotifyManager.currentPlaylistTracks
         }
-        
-        let lowercasedSearch = searchText.lowercased()
+
+        let lowercasedSearch = debouncedSearchText.lowercased()
         return spotifyManager.currentPlaylistTracks.filter { track in
             track.name.lowercased().contains(lowercasedSearch) ||
             track.artist.lowercased().contains(lowercasedSearch) ||
@@ -72,10 +89,48 @@ struct TrackTableView: View {
                 playlist: playlist,
                 spotifyManager: spotifyManager,
                 showDeleteConfirmation: $showDeleteConfirmation,
-                searchText: searchText
+                searchText: debouncedSearchText
             )
         }
-        .id("\(playlist?.id ?? "")-\(searchText)-\(spotifyManager.currentPlaylistTracks.count)")
+        // Optimized ID: only includes playlist ID and search text, not count
+        // This prevents full table rebuild on track additions/removals
+        .id("\(playlist?.id ?? "")-\(debouncedSearchText)")
+        .onChange(of: searchText) { oldValue, newValue in
+            // Debounce search input - wait 300ms before filtering
+            searchDebounceTask?.cancel()
+            searchDebounceTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    debouncedSearchText = newValue
+                    updateCachedFilteredTracks()
+                }
+            }
+        }
+        .onChange(of: spotifyManager.currentPlaylistTracks.count) { _, _ in
+            // Update cache when tracks change
+            updateCachedFilteredTracks()
+        }
+        .onAppear {
+            debouncedSearchText = searchText
+            updateCachedFilteredTracks()
+        }
+    }
+
+    private func updateCachedFilteredTracks() {
+        lastSearchText = debouncedSearchText
+        lastTrackCount = spotifyManager.currentPlaylistTracks.count
+
+        if debouncedSearchText.isEmpty {
+            cachedFilteredTracks = spotifyManager.currentPlaylistTracks
+        } else {
+            let lowercasedSearch = debouncedSearchText.lowercased()
+            cachedFilteredTracks = spotifyManager.currentPlaylistTracks.filter { track in
+                track.name.lowercased().contains(lowercasedSearch) ||
+                track.artist.lowercased().contains(lowercasedSearch) ||
+                track.album.lowercased().contains(lowercasedSearch)
+            }
+        }
     }
 }
 

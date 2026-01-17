@@ -12,6 +12,9 @@ struct TrackInspectorView: View {
     @State private var albumArtImage: NSImage?
     @State private var isLoadingImage = false
     @State private var showingAlbumArtModal = false
+    @State private var currentImageURL: String?
+
+    private let imageCache = ImageCache.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -109,6 +112,17 @@ struct TrackInspectorView: View {
                 loadAlbumArt(from: urlString)
             } else {
                 albumArtImage = nil
+                currentImageURL = nil
+            }
+        }
+        .onChange(of: track?.id) { oldValue, newValue in
+            // Clear image when track changes (even if same album art URL)
+            if oldValue != newValue {
+                albumArtImage = nil
+                currentImageURL = nil
+                if let urlString = track?.albumArtURL {
+                    loadAlbumArt(from: urlString)
+                }
             }
         }
         .onAppear {
@@ -128,23 +142,34 @@ struct TrackInspectorView: View {
     }
 
     private func loadAlbumArt(from urlString: String) {
-        guard let url = URL(string: urlString) else { return }
+        // Prevent duplicate loads for the same URL
+        guard currentImageURL != urlString else { return }
+        currentImageURL = urlString
+
+        // Check cache first (synchronous)
+        if let cached = imageCache.image(for: urlString) {
+            albumArtImage = cached
+            isLoadingImage = false
+            return
+        }
 
         isLoadingImage = true
 
         Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let image = NSImage(data: data) {
-                    await MainActor.run {
+            // Fetch with caching
+            if let image = await imageCache.image(from: urlString) {
+                await MainActor.run {
+                    // Verify we're still showing the same track
+                    if self.currentImageURL == urlString {
                         self.albumArtImage = image
                         self.isLoadingImage = false
                     }
                 }
-            } catch {
-                print("Failed to load album art: \(error)")
+            } else {
                 await MainActor.run {
-                    self.isLoadingImage = false
+                    if self.currentImageURL == urlString {
+                        self.isLoadingImage = false
+                    }
                 }
             }
         }

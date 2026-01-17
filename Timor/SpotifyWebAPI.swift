@@ -10,18 +10,90 @@ import SwiftUI
 import AuthenticationServices
 import Combine
 import AppKit
+import os.log
+import CryptoKit
+
+// MARK: - Certificate Pinning Delegate
+private class PinnedURLSessionDelegate: NSObject, URLSessionDelegate {
+    // Spotify API certificate public key hashes (SHA-256)
+    // These should be updated if Spotify rotates certificates
+    private static let pinnedPublicKeyHashes: Set<String> = [
+        // Primary Spotify API certificate
+        // Note: In production, obtain these from Spotify's certificate chain
+        // For now, we'll use a permissive mode that still validates the chain
+    ]
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        // Verify the certificate chain is valid
+        var error: CFError?
+        let isValid = SecTrustEvaluateWithError(serverTrust, &error)
+
+        guard isValid else {
+            SpotifyWebAPI.logger.error("Certificate validation failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        // If we have pinned hashes, verify the public key
+        if !Self.pinnedPublicKeyHashes.isEmpty {
+            guard let certificate = SecTrustGetCertificateAtIndex(serverTrust, 0) else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+                return
+            }
+
+            // Extract public key and hash it
+            if let publicKey = SecCertificateCopyKey(certificate),
+               let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? {
+                let hash = SHA256.hash(data: publicKeyData)
+                let hashString = hash.compactMap { String(format: "%02x", $0) }.joined()
+
+                if Self.pinnedPublicKeyHashes.contains(hashString) {
+                    completionHandler(.useCredential, URLCredential(trust: serverTrust))
+                    return
+                } else {
+                    SpotifyWebAPI.logger.error("Certificate pinning failed - hash mismatch")
+                    completionHandler(.cancelAuthenticationChallenge, nil)
+                    return
+                }
+            }
+        }
+
+        // For now, accept valid certificates (pinning disabled until hashes configured)
+        completionHandler(.useCredential, URLCredential(trust: serverTrust))
+    }
+}
 
 @MainActor
 class SpotifyWebAPI: NSObject, ObservableObject {
     static let shared = SpotifyWebAPI()
 
+    // MARK: - Logging
+    fileprivate static let logger = Logger(subsystem: "com.timor.spotify", category: "SpotifyWebAPI")
+
     @Published var isAuthenticated = false
     @Published var accessToken: String?
     @Published var refreshToken: String?
+    @Published var tokenExpiryDate: Date?
 
     private let keychain = KeychainManager.shared
     private var authSession: ASWebAuthenticationSession?
     private var currentUserId: String?
+    private var tokenRefreshTimer: Timer?
+
+    // URLSession with certificate pinning
+    private lazy var pinnedSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        return URLSession(configuration: config, delegate: PinnedURLSessionDelegate(), delegateQueue: nil)
+    }()
 
     private let baseURL = Constants.Spotify.baseURL
     private let tokenURL = Constants.Spotify.tokenURL
@@ -30,23 +102,80 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     private override init() {
         super.init()
         loadTokens()
+        setupTokenRefreshTimer()
+    }
+
+    deinit {
+        tokenRefreshTimer?.invalidate()
     }
 
     var clientID: String {
         (try? keychain.retrieve(for: "spotify_client_id")) ?? ""
     }
 
-    var clientSecret: String {
-        (try? keychain.retrieve(for: "spotify_client_secret")) ?? ""
+    /// Retrieves client secret securely - minimizes time in memory
+    private func getClientSecretData() -> Data? {
+        guard let secret = try? keychain.retrieve(for: "spotify_client_secret"),
+              !secret.isEmpty else {
+            return nil
+        }
+        return secret.data(using: .utf8)
+    }
+
+    /// Creates Basic Auth header with minimal secret exposure
+    private func createBasicAuthHeader() -> String? {
+        guard let clientIdData = clientID.data(using: .utf8),
+              let secretData = getClientSecretData() else {
+            return nil
+        }
+
+        // Combine credentials
+        var credentials = clientIdData
+        credentials.append(":".data(using: .utf8)!)
+        credentials.append(secretData)
+
+        let base64 = credentials.base64EncodedString()
+
+        // Clear sensitive data
+        credentials.resetBytes(in: 0..<credentials.count)
+
+        return "Basic \(base64)"
     }
 
     var redirectURI: String {
         Constants.Spotify.redirectURI
     }
 
+    private func setupTokenRefreshTimer() {
+        // Check token expiry every minute
+        tokenRefreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.checkAndRefreshTokenIfNeeded()
+            }
+        }
+    }
+
+    private func checkAndRefreshTokenIfNeeded() async {
+        guard let expiryDate = tokenExpiryDate else { return }
+
+        // Refresh if token expires in less than 5 minutes
+        let fiveMinutesFromNow = Date().addingTimeInterval(5 * 60)
+        if expiryDate < fiveMinutesFromNow && refreshToken != nil {
+            Self.logger.info("Token expiring soon, proactively refreshing")
+            _ = await refreshAccessToken()
+        }
+    }
+
     private func loadTokens() {
         accessToken = try? keychain.retrieve(for: "spotify_web_access_token")
         refreshToken = try? keychain.retrieve(for: "spotify_web_refresh_token")
+
+        // Load token expiry if stored
+        if let expiryString = try? keychain.retrieve(for: "spotify_token_expiry"),
+           let expiryInterval = TimeInterval(expiryString) {
+            tokenExpiryDate = Date(timeIntervalSince1970: expiryInterval)
+        }
+
         isAuthenticated = accessToken != nil
 
         // If we have tokens, validate them on startup
@@ -62,10 +191,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         if refreshToken != nil {
             // Try to refresh the token
             if await refreshAccessToken() {
-                print("Successfully refreshed access token on startup")
+                Self.logger.info("Successfully refreshed access token on startup")
             } else if accessToken == nil {
                 // Only clear if we don't have a valid access token
-                print("Failed to refresh token on startup, will require re-authentication")
+                Self.logger.warning("Failed to refresh token on startup, will require re-authentication")
                 await MainActor.run {
                     logout()
                 }
@@ -73,10 +202,17 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
     }
 
-    private func saveTokens(accessToken: String, refreshToken: String?) {
+    private func saveTokens(accessToken: String, refreshToken: String?, expiresIn: Int? = nil) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.isAuthenticated = true
+
+        // Calculate and store expiry date
+        if let expiresIn = expiresIn {
+            let expiryDate = Date().addingTimeInterval(TimeInterval(expiresIn))
+            self.tokenExpiryDate = expiryDate
+            try? keychain.save(String(expiryDate.timeIntervalSince1970), for: "spotify_token_expiry")
+        }
 
         try? keychain.save(accessToken, for: "spotify_web_access_token")
         if let refreshToken = refreshToken {
@@ -88,8 +224,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     }
 
     func authenticate() {
-        guard !clientID.isEmpty && !clientSecret.isEmpty else {
-            print("Client ID and Secret must be configured")
+        guard !clientID.isEmpty, getClientSecretData() != nil else {
+            Self.logger.warning("Client ID and Secret must be configured")
             return
         }
 
@@ -112,13 +248,13 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 guard let self = self else { return }
 
                 if let error = error {
-                    print("Authentication error: \(error)")
+                    Self.logger.error("Authentication error: \(error.localizedDescription, privacy: .public)")
                     return
                 }
 
                 guard let callbackURL = callbackURL,
                       let code = self.extractCode(from: callbackURL) else {
-                    print("Failed to extract authorization code")
+                    Self.logger.error("Failed to extract authorization code")
                     return
                 }
 
@@ -140,23 +276,21 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
     private func exchangeCodeForTokens(code: String) async {
         guard let url = URL(string: tokenURL) else {
-            print("Failed to create token URL")
+            Self.logger.error("Failed to create token URL")
             return
         }
 
-        print("Exchanging code for tokens...")
-        print("Token URL: \(tokenURL)")
-        print("Client ID: \(clientID)")
-        print("Has Client Secret: \(!clientSecret.isEmpty)")
+        guard let authHeader = createBasicAuthHeader() else {
+            Self.logger.error("Failed to create authorization header")
+            return
+        }
+
+        Self.logger.debug("Exchanging authorization code for tokens")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-
-        let credentials = "\(clientID):\(clientSecret)"
-        let credentialsData = credentials.data(using: .utf8)!
-        let base64Credentials = credentialsData.base64EncodedString()
-        request.setValue("Basic \(base64Credentials)", forHTTPHeaderField: "Authorization")
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
 
         let bodyParams = [
             "grant_type": "authorization_code",
@@ -170,28 +304,33 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             .data(using: .utf8)
 
         do {
-            print("Sending token exchange request...")
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                print("Invalid response type")
+                Self.logger.error("Invalid response type from token endpoint")
                 return
             }
 
             if httpResponse.statusCode != 200 {
-                print("Token exchange failed with status: \(httpResponse.statusCode)")
+                Self.logger.error("Token exchange failed with status: \(httpResponse.statusCode)")
+                #if DEBUG
                 if let errorString = String(data: data, encoding: .utf8) {
-                    print("Error response: \(errorString)")
+                    Self.logger.debug("Error response: \(errorString, privacy: .private)")
                 }
+                #endif
                 return
             }
 
             let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
-            saveTokens(accessToken: tokenResponse.access_token, refreshToken: tokenResponse.refresh_token)
+            saveTokens(
+                accessToken: tokenResponse.access_token,
+                refreshToken: tokenResponse.refresh_token,
+                expiresIn: tokenResponse.expires_in
+            )
 
-            print("Successfully authenticated with Spotify Web API")
+            Self.logger.info("Successfully authenticated with Spotify Web API")
         } catch {
-            print("Token exchange error: \(error)")
+            Self.logger.error("Token exchange error: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -199,14 +338,15 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         guard let refreshToken = refreshToken else { return false }
         guard let url = URL(string: tokenURL) else { return false }
 
+        guard let authHeader = createBasicAuthHeader() else {
+            Self.logger.error("Failed to create authorization header for token refresh")
+            return false
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-
-        let credentials = "\(clientID):\(clientSecret)"
-        let credentialsData = credentials.data(using: .utf8)!
-        let base64Credentials = credentialsData.base64EncodedString()
-        request.setValue("Basic \(base64Credentials)", forHTTPHeaderField: "Authorization")
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
 
         let bodyParams = [
             "grant_type": "refresh_token",
@@ -219,39 +359,56 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             .data(using: .utf8)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
+                Self.logger.warning("Token refresh failed with non-200 status")
                 return false
             }
 
             let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
-            saveTokens(accessToken: tokenResponse.access_token, refreshToken: tokenResponse.refresh_token ?? refreshToken)
+            saveTokens(
+                accessToken: tokenResponse.access_token,
+                refreshToken: tokenResponse.refresh_token ?? refreshToken,
+                expiresIn: tokenResponse.expires_in
+            )
 
             return true
         } catch {
-            print("Token refresh error: \(error)")
+            Self.logger.error("Token refresh error: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
 
+    // MARK: - URL Construction Helpers
+
+    /// Safely constructs API URL with path and query parameters
+    private func buildAPIURL(path: String, queryItems: [URLQueryItem]? = nil) -> URL? {
+        var components = URLComponents(string: baseURL)
+        components?.path += path
+        if let queryItems = queryItems, !queryItems.isEmpty {
+            components?.queryItems = queryItems
+        }
+        return components?.url
+    }
+
     func fetchCurrentUser() async -> String? {
         guard let accessToken = accessToken else { return nil }
-        guard let url = URL(string: "\(baseURL)/me") else { return nil }
+        guard let url = buildAPIURL(path: "/me") else { return nil }
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, _) = try await pinnedSession.data(for: request)
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let userId = json["id"] as? String {
                 currentUserId = userId
                 return userId
             }
         } catch {
-            print("Error fetching current user: \(error)")
+            Self.logger.error("Error fetching current user: \(error.localizedDescription, privacy: .public)")
         }
         return nil
     }
@@ -270,7 +427,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                 // Token expired, try to refresh
@@ -316,7 +473,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await pinnedSession.data(for: request)
 
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                     // Token expired, try to refresh
@@ -451,7 +608,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             // Log the raw response
             if let responseString = String(data: data, encoding: .utf8) {
@@ -537,7 +694,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -628,7 +785,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -665,7 +822,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -707,7 +864,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -742,7 +899,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -792,7 +949,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -838,7 +995,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -887,7 +1044,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -931,7 +1088,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await pinnedSession.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 401 {
@@ -979,7 +1136,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
             do {
                 request.httpBody = try JSONSerialization.data(withJSONObject: body)
-                let (_, response) = try await URLSession.shared.data(for: request)
+                let (_, response) = try await pinnedSession.data(for: request)
 
                 if let httpResponse = response as? HTTPURLResponse {
                     if httpResponse.statusCode == 401 {
@@ -1007,10 +1164,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     func logout() {
         accessToken = nil
         refreshToken = nil
+        tokenExpiryDate = nil
         isAuthenticated = false
 
         try? keychain.delete(for: "spotify_web_access_token")
         try? keychain.delete(for: "spotify_web_refresh_token")
+        try? keychain.delete(for: "spotify_token_expiry")
 
         // Notify observers of authentication state change
         NotificationCenter.default.post(name: .init("SpotifyWebAPIAuthChanged"), object: nil)

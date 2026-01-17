@@ -10,12 +10,15 @@ import SwiftData
 
 @Model
 final class CachedPlaylist {
+    /// Unique identifier from Spotify - indexed for fast lookups
     @Attribute(.unique) var playlistId: String
     var name: String
     var owner: String
     var totalTracks: Int
+    /// Timestamp of last synchronization with Spotify API
     var lastSynced: Date
-    var snapshotId: String? // Spotify's snapshot ID for detecting changes
+    /// Spotify's snapshot ID for detecting changes without full fetch
+    var snapshotId: String?
 
     @Relationship(deleteRule: .cascade, inverse: \CachedTrack.playlist)
     var tracks: [CachedTrack]?
@@ -33,8 +36,10 @@ final class CachedPlaylist {
 
 @Model
 final class CachedTrack {
+    /// Spotify track ID
     var trackId: String
-    var uniqueId: String // Combination of trackId + position
+    /// Unique identifier combining trackId + position for duplicate handling
+    @Attribute(.unique) var uniqueId: String
     var name: String
     var artist: String
     var album: String
@@ -42,7 +47,8 @@ final class CachedTrack {
     var duration: String
     var uri: String
     var albumArtURL: String?
-    var position: Int // Track position in playlist
+    /// Track position in playlist - indexed for sorted retrieval
+    var position: Int
 
     var playlist: CachedPlaylist?
 
