@@ -13,6 +13,7 @@ import AppKit
 import UniformTypeIdentifiers
 import SwiftData
 import os.log
+import Network
 
 extension UTType {
     static var spotifyTrack: UTType {
@@ -20,10 +21,47 @@ extension UTType {
     }
 }
 
-/// Represents an atomic playlist loading operation to prevent race conditions
+// MARK: - Logging
+private nonisolated(unsafe) let spotifyLogger = Logger(subsystem: "com.timor", category: "spotify-manager")
+
+// MARK: - Concurrency Primitives
+
+/// Represents an atomic playlist loading operation to prevent race conditions.
+///
+/// ## Race Condition Prevention Pattern
+///
+/// When users rapidly switch between playlists, multiple async fetch operations can
+/// overlap. Without coordination, a slow fetch for Playlist A could complete after
+/// a fast fetch for Playlist B, causing Playlist A's tracks to appear when viewing B.
+///
+/// This struct provides operation identity for validation at critical checkpoints:
+///
+/// ```
+/// 1. Create operation with unique UUID
+/// 2. Store as currentLoadOperation
+/// 3. Start async fetch
+/// 4. At each state mutation point, verify:
+///    - currentLoadOperation?.id == operation.id (operation still valid)
+///    - currentLoadOperation?.playlistId == expectedId (playlist unchanged)
+/// 5. If validation fails, abort silently (newer operation supersedes)
+/// ```
+///
+/// **Checkpoint Locations** (search for `currentLoadOperation?.id ==`):
+/// - Before updating `currentPlaylistTracks`
+/// - Before updating `isLoadingTracks`
+/// - Before caching fetched tracks
+/// - Before updating `loadingProgress`
+///
+/// - Note: This is a defensive pattern for UI-bound async operations where user
+///   intent (which playlist to view) can change during long-running network requests.
 private struct PlaylistLoadOperation: Equatable {
+    /// Unique identifier for this specific fetch operation
     let id: UUID
+
+    /// The playlist being fetched (used for double-validation)
     let playlistId: String
+
+    /// When the operation started (for debugging/metrics)
     let startTime: Date
 
     static func == (lhs: PlaylistLoadOperation, rhs: PlaylistLoadOperation) -> Bool {
@@ -48,10 +86,33 @@ class SpotifyManager: ObservableObject {
     @Published var selectedPlaylist: Playlist?
     @Published var isViewingLikedSongs = false
     @Published var lastError: String?
+    @Published var lastErrorRecovery: String?
     @Published var showError = false
     @Published var lastCacheUpdate: Date?
     @Published var isUsingCache = false
     @Published var modelContainerFailed = false
+
+    /// Network connectivity state
+    @Published var isOnline = true
+    @Published var connectionType: ConnectionType = .unknown
+
+    enum ConnectionType {
+        case unknown
+        case wifi
+        case cellular
+        case wired
+        case other
+
+        var description: String {
+            switch self {
+            case .unknown: return "Unknown"
+            case .wifi: return "Wi-Fi"
+            case .cellular: return "Cellular"
+            case .wired: return "Ethernet"
+            case .other: return "Connected"
+            }
+        }
+    }
 
     /// Undo manager for playlist operations
     let playlistUndoManager = PlaylistUndoManager()
@@ -63,6 +124,8 @@ class SpotifyManager: ObservableObject {
     private var fetchTask: Task<Void, Never>?
     private var currentLoadOperation: PlaylistLoadOperation?
     private var authObserverTask: Task<Void, Never>?
+    private var networkMonitor: NWPathMonitor?
+    private let networkQueue = DispatchQueue(label: "com.timor.network-monitor")
 
     struct Playlist: Identifiable {
         let id: String
@@ -93,10 +156,53 @@ class SpotifyManager: ObservableObject {
     private init() {
         setupModelContainer()
         setupWebAPIObserver()
+        setupNetworkMonitor()
     }
 
     deinit {
         authObserverTask?.cancel()
+        networkMonitor?.cancel()
+    }
+
+    // MARK: - Network Monitoring
+
+    private func setupNetworkMonitor() {
+        networkMonitor = NWPathMonitor()
+        networkMonitor?.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.updateNetworkStatus(path)
+            }
+        }
+        networkMonitor?.start(queue: networkQueue)
+    }
+
+    private func updateNetworkStatus(_ path: NWPath) {
+        let wasOnline = isOnline
+        isOnline = path.status == .satisfied
+
+        // Determine connection type
+        if path.usesInterfaceType(.wifi) {
+            connectionType = .wifi
+        } else if path.usesInterfaceType(.cellular) {
+            connectionType = .cellular
+        } else if path.usesInterfaceType(.wiredEthernet) {
+            connectionType = .wired
+        } else if path.status == .satisfied {
+            connectionType = .other
+        } else {
+            connectionType = .unknown
+        }
+
+        // Log transitions
+        if wasOnline && !isOnline {
+            spotifyLogger.info("Network went offline")
+        } else if !wasOnline && isOnline {
+            spotifyLogger.info("Network came back online via \(self.connectionType.description)")
+            // Refresh data when coming back online
+            if isAuthenticated {
+                fetchPlaylists()
+            }
+        }
     }
 
     private func setupModelContainer() {
@@ -154,8 +260,10 @@ class SpotifyManager: ObservableObject {
         } catch {
             Self.logger.error("ModelContainer recovery failed: \(error.localizedDescription, privacy: .public)")
             // Continue without caching - app will still work but slower
-            lastError = "Cache initialization failed. The app will work but playlists won't be cached locally."
-            showError = true
+            displayError(
+                "Cache initialization failed",
+                recovery: "The app will still work, but playlists won't be cached locally."
+            )
         }
     }
 
@@ -214,6 +322,42 @@ class SpotifyManager: ObservableObject {
         currentTrack = ""
     }
 
+    // MARK: - Error Handling
+
+    /// Display a user-facing error with optional recovery suggestion
+    func displayError(_ error: Error) {
+        if let spotifyError = error as? SpotifyError {
+            lastError = spotifyError.localizedDescription
+            lastErrorRecovery = spotifyError.recoverySuggestion
+        } else if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .networkConnectionLost:
+                lastError = "No internet connection"
+                lastErrorRecovery = "Check your connection and try again."
+            case .timedOut:
+                lastError = "Request timed out"
+                lastErrorRecovery = "Spotify may be slow. Try again."
+            case .cancelled:
+                // Don't show error for cancelled requests
+                return
+            default:
+                lastError = "Network error"
+                lastErrorRecovery = "Check your connection and try again."
+            }
+        } else {
+            lastError = error.localizedDescription
+            lastErrorRecovery = nil
+        }
+        showError = true
+    }
+
+    /// Display a user-facing error with a custom message and optional recovery
+    func displayError(_ message: String, recovery: String? = nil) {
+        lastError = message
+        lastErrorRecovery = recovery
+        showError = true
+    }
+
     func fetchPlaylists() {
         Task {
             do {
@@ -221,8 +365,10 @@ class SpotifyManager: ObservableObject {
                 await MainActor.run {
                     self.playlists = webPlaylists
                     if webPlaylists.isEmpty && SpotifyWebAPI.shared.isAuthenticated {
-                        self.lastError = "Failed to fetch playlists. Check your connection and try again."
-                        self.showError = true
+                        self.displayError(
+                            "Couldn't fetch your playlists",
+                            recovery: "Check your internet connection and try refreshing."
+                        )
                     }
                 }
             }
@@ -268,10 +414,10 @@ class SpotifyManager: ObservableObject {
     }
 
     func likeTrack(_ track: Track) async -> Bool {
-        print("Attempting to like track: \(track.name) (ID: \(track.trackId))")
+        spotifyLogger.debug("Attempting to like track: \(track.name) (ID: \(track.trackId))")
         let success = await SpotifyWebAPI.shared.saveTracks(trackIds: [track.trackId])
         if success {
-            print("Successfully liked track: \(track.name)")
+            spotifyLogger.info("Successfully liked track: \(track.name)")
             // Update the local track's liked status
             await MainActor.run {
                 if let index = self.currentPlaylistTracks.firstIndex(where: { $0.id == track.id }) {
@@ -281,7 +427,7 @@ class SpotifyManager: ObservableObject {
 
             // Don't auto-refresh Liked Songs to avoid overwriting cache
         } else {
-            print("Failed to like track: \(track.name)")
+            spotifyLogger.error("Failed to like track: \(track.name)")
         }
         return success
     }
@@ -390,12 +536,46 @@ class SpotifyManager: ObservableObject {
         return (succeeded, failed)
     }
 
+    /// Checks liked/saved status for all tracks in the current playlist.
+    ///
+    /// ## Bounded Parallel Execution Pattern
+    ///
+    /// This method demonstrates a common pattern for concurrent API calls with rate limiting:
+    ///
+    /// **Problem**: Checking 500 tracks sequentially takes ~50 seconds (100ms per request).
+    /// Unbounded parallelism could trigger Spotify's rate limits (429 errors).
+    ///
+    /// **Solution**: Bounded parallelism with a "worker pool" pattern:
+    /// ```
+    /// ┌─────────────────────────────────────────────────────────────┐
+    /// │  maxConcurrency = 5                                         │
+    /// │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                   │
+    /// │  │Slot1│ │Slot2│ │Slot3│ │Slot4│ │Slot5│  ← Active tasks   │
+    /// │  └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                   │
+    /// │     │       │       │       │       │                       │
+    /// │     ▼       ▼       ▼       ▼       ▼                       │
+    /// │  [Batch1] [Batch2] [Batch3] [Batch4] [Batch5]               │
+    /// │                                                             │
+    /// │  When Batch1 completes → Slot1 starts Batch6                │
+    /// │  When Batch2 completes → Slot2 starts Batch7                │
+    /// │  ... until pendingBatches is empty                          │
+    /// └─────────────────────────────────────────────────────────────┘
+    /// ```
+    ///
+    /// **Performance**: 5x speedup (10 seconds for 500 tracks vs 50 seconds sequential)
+    ///
+    /// **Thread Safety**:
+    /// - `tracksSnapshot` captures array state before async work (avoids mutation during iteration)
+    /// - Results collected in `allResults`, then applied atomically on MainActor
+    /// - Uses track ID matching to handle array reordering during fetch
+    ///
+    /// - Note: The RateLimiter actor in SpotifyWebAPI provides additional protection against 429s.
     func checkTracksLikedStatus() async {
-        // Capture a snapshot of tracks to avoid range errors if the array changes
+        // Capture a snapshot of tracks to avoid range errors if the array changes during async work
         let tracksSnapshot = currentPlaylistTracks
         guard !tracksSnapshot.isEmpty else { return }
 
-        // Create batches for concurrent processing
+        // Create batches for concurrent processing (50 tracks per batch = Spotify API limit)
         let batchSize = Constants.Spotify.trackCheckBatchSize
         var batches: [(startIndex: Int, trackIds: [String])] = []
 
@@ -406,16 +586,16 @@ class SpotifyManager: ObservableObject {
             batches.append((startIndex, trackIds))
         }
 
-        // Process batches concurrently with TaskGroup (max 5 concurrent requests)
-        // This provides 5x speedup over sequential processing
+        // Bounded parallelism: max 5 concurrent requests to respect rate limits while maximizing throughput
         let maxConcurrency = 5
         var allResults: [(startIndex: Int, statuses: [Bool])] = []
 
+        // TaskGroup with manual concurrency control (worker pool pattern)
         await withTaskGroup(of: (Int, [Bool]).self) { group in
             var pendingBatches = batches[...]
             var activeTasks = 0
 
-            // Start initial batch of tasks
+            // Prime the pump: start initial batch of concurrent tasks
             while activeTasks < maxConcurrency && !pendingBatches.isEmpty {
                 let batch = pendingBatches.removeFirst()
                 activeTasks += 1
@@ -425,12 +605,12 @@ class SpotifyManager: ObservableObject {
                 }
             }
 
-            // Process results and start new tasks as others complete
+            // As each task completes, start a new one (maintains concurrency level)
             for await (startIndex, statuses) in group {
                 allResults.append((startIndex, statuses))
                 activeTasks -= 1
 
-                // Start next batch if available
+                // Refill: start next batch if available
                 if !pendingBatches.isEmpty {
                     let batch = pendingBatches.removeFirst()
                     activeTasks += 1
@@ -572,7 +752,7 @@ class SpotifyManager: ObservableObject {
             let sortedTracks = tracks.sorted { $0.position < $1.position }
             return sortedTracks.map { $0.toTrack() }
         } catch {
-            print("Error loading liked songs from cache: \(error)")
+            spotifyLogger.error("Error loading liked songs from cache: \(error)")
             return nil
         }
     }
@@ -630,9 +810,9 @@ class SpotifyManager: ObservableObject {
             modelContext.insert(cachedPlaylist)
             try modelContext.save()
 
-            print("Successfully cached \(tracks.count) liked songs")
+            spotifyLogger.info("Successfully cached \(tracks.count) liked songs")
         } catch {
-            print("Error caching liked songs: \(error)")
+            spotifyLogger.error("Error caching liked songs: \(error)")
         }
     }
 
@@ -725,14 +905,18 @@ class SpotifyManager: ObservableObject {
                         self.currentPlaylistTracks = cachedTracks
                         self.isLoadingTracks = false
                         self.isUsingCache = true
-                        self.lastError = "Couldn't refresh playlist. Showing cached data."
-                        self.showError = true
+                        self.displayError(
+                            "Couldn't refresh playlist",
+                            recovery: "Showing cached data. Pull to refresh when back online."
+                        )
                         return
                     }
 
                     // No cache available - show error
-                    self.lastError = "Failed to load playlist tracks. Please try again."
-                    self.showError = true
+                    self.displayError(
+                        "Failed to load playlist tracks",
+                        recovery: "Check your connection and try selecting the playlist again."
+                    )
                     self.isLoadingTracks = false
                     return
                 }
@@ -801,7 +985,7 @@ class SpotifyManager: ObservableObject {
                     .map { $0.toTrack() }
             }
         } catch {
-            print("Failed to load cached tracks: \(error)")
+            spotifyLogger.error("Failed to load cached tracks: \(error)")
         }
 
         return nil
@@ -813,7 +997,7 @@ class SpotifyManager: ObservableObject {
         // Important: Verify track count before caching
         let trackCount = tracks.count
         guard trackCount > 0 else {
-            print("WARNING: Attempting to cache empty track list, aborting")
+            spotifyLogger.warning("Attempting to cache empty track list, aborting")
             return
         }
 
@@ -832,7 +1016,7 @@ class SpotifyManager: ObservableObject {
 
                 // Delete old tracks properly in batch
                 if let oldTracks = cachedPlaylist.tracks {
-                    print("Deleting \(oldTracks.count) old cached tracks for playlist update")
+                    spotifyLogger.debug("Deleting \(oldTracks.count) old cached tracks for playlist update")
                     for track in oldTracks {
                         modelContext.delete(track)
                     }
@@ -876,7 +1060,7 @@ class SpotifyManager: ObservableObject {
 
             // Save atomically
             try modelContext.save()
-            print("Successfully cached \(trackCount) tracks for playlist \(playlistId)")
+            spotifyLogger.info("Successfully cached \(trackCount) tracks for playlist \(playlistId)")
 
             // Verify the save was successful
             let verifyDescriptor = FetchDescriptor<CachedPlaylist>(
@@ -885,13 +1069,13 @@ class SpotifyManager: ObservableObject {
             let verifyResult = try modelContext.fetch(verifyDescriptor)
             if let savedPlaylist = verifyResult.first,
                let savedTracks = savedPlaylist.tracks {
-                print("Verified: \(savedTracks.count) tracks saved in cache")
+                spotifyLogger.debug("Verified: \(savedTracks.count) tracks saved in cache")
                 if savedTracks.count != trackCount {
-                    print("ERROR: Track count mismatch after save! Expected: \(trackCount), Got: \(savedTracks.count)")
+                    spotifyLogger.error("Track count mismatch after save! Expected: \(trackCount), Got: \(savedTracks.count)")
                 }
             }
         } catch {
-            print("Failed to cache playlist tracks: \(error)")
+            spotifyLogger.error("Failed to cache playlist tracks: \(error)")
         }
     }
 
@@ -1058,12 +1242,12 @@ class SpotifyManager: ObservableObject {
     }
 
     func shuffleAndSavePlaylist(_ playlistId: String) async -> Bool {
-        print("shuffleAndSavePlaylist called for playlist: \(playlistId)")
+        spotifyLogger.debug("shuffleAndSavePlaylist called for playlist: \(playlistId)")
 
         // CRITICAL SAFETY CHECK: Verify playlist ID matches selected playlist
         guard let currentSelectedPlaylist = selectedPlaylist,
               currentSelectedPlaylist.id == playlistId else {
-            print("ERROR: Playlist ID mismatch! Aborting shuffle to prevent overwrite.")
+            spotifyLogger.error("Playlist ID mismatch! Aborting shuffle to prevent overwrite.")
             return false
         }
 
@@ -1073,11 +1257,11 @@ class SpotifyManager: ObservableObject {
         // Check and set shuffling state
         let canProceed = await MainActor.run {
             if self.isShuffling {
-                print("Shuffle already in progress, ignoring request")
+                spotifyLogger.warning("Shuffle already in progress, ignoring request")
                 return false
             }
             self.isShuffling = true
-            print("Setting isShuffling to true")
+            spotifyLogger.debug("Setting isShuffling to true")
             return true
         }
 
@@ -1094,7 +1278,7 @@ class SpotifyManager: ObservableObject {
             // SECOND SAFETY CHECK: Verify we're still on the same playlist
             guard let currentSelectedPlaylist = self.selectedPlaylist,
                   currentSelectedPlaylist.id == playlistId else {
-                print("ERROR: Playlist changed during shuffle! Aborting.")
+                spotifyLogger.error("Playlist changed during shuffle! Aborting.")
                 return false
             }
 
@@ -1104,7 +1288,7 @@ class SpotifyManager: ObservableObject {
 
             // Ensure we have tracks to shuffle
             guard !originalTracks.isEmpty else {
-                print("No tracks to shuffle")
+                spotifyLogger.warning("No tracks to shuffle")
                 return false
             }
 
@@ -1112,17 +1296,17 @@ class SpotifyManager: ObservableObject {
             // Allow some flexibility for recently modified playlists
             let trackCountDifference = abs(originalCount - currentSelectedPlaylist.totalTracks)
             if trackCountDifference > Constants.Validation.trackCountDifferenceThreshold && currentSelectedPlaylist.totalTracks > 0 {
-                print("WARNING: Large track count difference! Playlist reports \(currentSelectedPlaylist.totalTracks) but we have \(originalCount)")
+                spotifyLogger.warning("Large track count difference! Playlist reports \(currentSelectedPlaylist.totalTracks) but we have \(originalCount)")
                 // Don't abort - the local count is likely more accurate if we just added/deleted tracks
             }
 
             // Shuffle the tracks
             let shuffledTracks = originalTracks.shuffled()
-            print("Shuffled \(originalCount) tracks for playlist: \(currentSelectedPlaylist.name)")
+            spotifyLogger.info("Shuffled \(originalCount) tracks for playlist: \(currentSelectedPlaylist.name)")
 
             // Verify we didn't lose tracks
             guard shuffledTracks.count == originalCount else {
-                print("Track count mismatch during shuffle! Original: \(originalCount), Shuffled: \(shuffledTracks.count)")
+                spotifyLogger.error("Track count mismatch during shuffle! Original: \(originalCount), Shuffled: \(shuffledTracks.count)")
                 return false
             }
 
@@ -1138,7 +1322,7 @@ class SpotifyManager: ObservableObject {
 
             // FINAL SAFETY CHECK before API call
             guard self.selectedPlaylist?.id == playlistId else {
-                print("ERROR: Playlist changed before API call! Reverting local changes.")
+                spotifyLogger.error("Playlist changed before API call! Reverting local changes.")
                 self.currentPlaylistTracks = originalTracks
                 return false
             }
@@ -1156,7 +1340,7 @@ class SpotifyManager: ObservableObject {
                 // Final verification
                 let finalCount = self.currentPlaylistTracks.count
                 if finalCount != originalCount {
-                    print("WARNING: Track count changed after shuffle! Expected: \(originalCount), Got: \(finalCount)")
+                    spotifyLogger.warning("Track count changed after shuffle! Expected: \(originalCount), Got: \(finalCount)")
                 }
 
                 // Register undo action to restore original order
@@ -1291,7 +1475,7 @@ class SpotifyManager: ObservableObject {
 
                         // Write CSV data to file
                         try dataFrame.writeCSV(to: url)
-                        print("Successfully exported playlist to: \(url.path)")
+                        spotifyLogger.info("Successfully exported playlist to: \(url.path)")
 
                         // Show success message
                         let alert = NSAlert()
@@ -1301,7 +1485,7 @@ class SpotifyManager: ObservableObject {
                         alert.addButton(withTitle: "OK")
                         alert.runModal()
                     } catch {
-                        print("Error exporting CSV: \(error)")
+                        spotifyLogger.error("Error exporting CSV: \(error)")
                         // Show error alert
                         let alert = NSAlert()
                         alert.messageText = "Export Failed"

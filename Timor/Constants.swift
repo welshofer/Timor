@@ -40,7 +40,19 @@ enum Constants {
         static let trackSearchHeight: CGFloat = 600
         static let createPlaylistWidth: CGFloat = 400
         static let createPlaylistHeight: CGFloat = 250
-        
+
+        // Inspector
+        static let inspectorMinWidth: CGFloat = 280
+        static let inspectorIdealWidth: CGFloat = 280
+        static let inspectorMaxWidth: CGFloat = 320
+
+        // Dialog Sizes
+        static let duplicateFinderWidth: CGFloat = 600
+        static let duplicateFinderHeight: CGFloat = 500
+        static let importViewWidth: CGFloat = 500
+        static let importViewHeight: CGFloat = 450
+        static let editPlaylistMinWidth: CGFloat = 300
+
         // Table Column Widths
         static let titleColumnMinWidth: CGFloat = 200
         static let artistColumnMinWidth: CGFloat = 150
@@ -48,11 +60,13 @@ enum Constants {
         static let releaseDateColumnWidth: CGFloat = 120
         static let durationColumnWidth: CGFloat = 80
         static let likeButtonColumnWidth: CGFloat = 30
-        
+
         // Padding
         static let defaultPadding: CGFloat = 12
         static let compactPadding: CGFloat = 8
         static let sectionSpacing: CGFloat = 20
+        static let largePadding: CGFloat = 24
+        static let itemSpacing: CGFloat = 16
     }
     
     enum Cache {

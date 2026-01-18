@@ -100,7 +100,7 @@ struct ImportView: View {
             // Footer
             footerView
         }
-        .frame(width: 500, height: 450)
+        .frame(width: Constants.UI.importViewWidth, height: Constants.UI.importViewHeight)
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [.commaSeparatedText],
@@ -131,8 +131,9 @@ struct ImportView: View {
     private var csvImportView: some View {
         VStack(spacing: 12) {
             Image(systemName: "doc.text")
-                .font(.system(size: 48))
+                .font(.largeTitle)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
             Text("Import from CSV file")
                 .font(.headline)
@@ -369,8 +370,8 @@ extension SpotifyManager {
                 }
             }
 
-            // Add tracks in batches of 100 (Spotify limit)
-            for chunk in trackUrisToAdd.chunked(into: 100) {
+            // Add tracks in batches (Spotify API limit)
+            for chunk in trackUrisToAdd.chunked(into: Constants.Spotify.trackFetchLimit) {
                 let success = await SpotifyWebAPI.shared.addTracksToPlaylist(
                     playlistId: playlistId,
                     trackUris: chunk
@@ -423,8 +424,8 @@ extension SpotifyManager {
             }
         }
 
-        // Add tracks in batches of 100
-        for chunk in trackUrisToAdd.chunked(into: 100) {
+        // Add tracks in batches (Spotify API limit)
+        for chunk in trackUrisToAdd.chunked(into: Constants.Spotify.trackFetchLimit) {
             let success = await SpotifyWebAPI.shared.addTracksToPlaylist(
                 playlistId: playlistId,
                 trackUris: chunk

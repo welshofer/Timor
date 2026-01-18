@@ -13,15 +13,208 @@ import AppKit
 import os.log
 import CryptoKit
 
+// MARK: - Logging
+private let spotifyAPILogger = Logger(subsystem: "com.timor", category: "spotify-api")
+
+// MARK: - Spotify Errors
+
+/// User-facing errors for Spotify API operations
+///
+/// These errors provide:
+/// - Clear, actionable messages for users
+/// - Technical details in the description for debugging
+/// - Recovery suggestions where appropriate
+enum SpotifyError: Error, LocalizedError {
+    // Authentication errors
+    case notAuthenticated
+    case authenticationFailed(reason: String)
+    case tokenRefreshFailed
+    case invalidCredentials
+
+    // Network errors
+    case networkUnavailable
+    case connectionFailed(underlying: Error?)
+    case requestTimeout
+    case serverError(statusCode: Int)
+
+    // Rate limiting
+    case rateLimited(retryAfter: TimeInterval)
+
+    // API errors
+    case invalidResponse
+    case playlistNotFound
+    case trackNotFound
+    case permissionDenied(operation: String)
+    case quotaExceeded
+
+    // Data errors
+    case decodingFailed(context: String)
+    case invalidData(reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthenticated:
+            return "Not connected to Spotify"
+        case .authenticationFailed(let reason):
+            return "Authentication failed: \(reason)"
+        case .tokenRefreshFailed:
+            return "Session expired"
+        case .invalidCredentials:
+            return "Invalid Spotify credentials"
+
+        case .networkUnavailable:
+            return "No internet connection"
+        case .connectionFailed:
+            return "Couldn't connect to Spotify"
+        case .requestTimeout:
+            return "Request timed out"
+        case .serverError(let statusCode):
+            return "Spotify server error (\(statusCode))"
+
+        case .rateLimited(let retryAfter):
+            return "Too many requests. Try again in \(Int(retryAfter)) seconds."
+
+        case .invalidResponse:
+            return "Invalid response from Spotify"
+        case .playlistNotFound:
+            return "Playlist not found"
+        case .trackNotFound:
+            return "Track not found"
+        case .permissionDenied(let operation):
+            return "Permission denied for \(operation)"
+        case .quotaExceeded:
+            return "Spotify API quota exceeded"
+
+        case .decodingFailed(let context):
+            return "Couldn't read data: \(context)"
+        case .invalidData(let reason):
+            return "Invalid data: \(reason)"
+        }
+    }
+
+    var recoverySuggestion: String? {
+        switch self {
+        case .notAuthenticated:
+            return "Open Settings and connect your Spotify account."
+        case .authenticationFailed:
+            return "Check your credentials in Settings and try again."
+        case .tokenRefreshFailed:
+            return "Please reconnect your Spotify account in Settings."
+        case .invalidCredentials:
+            return "Verify your Client ID and Secret in Settings."
+
+        case .networkUnavailable:
+            return "Check your internet connection and try again."
+        case .connectionFailed:
+            return "Check your connection. Spotify might be temporarily unavailable."
+        case .requestTimeout:
+            return "The operation took too long. Try again."
+        case .serverError:
+            return "Spotify is having issues. Try again later."
+
+        case .rateLimited:
+            return "You're making requests too quickly. The app will automatically retry."
+
+        case .playlistNotFound:
+            return "This playlist may have been deleted or made private."
+        case .trackNotFound:
+            return "This track may no longer be available on Spotify."
+        case .permissionDenied:
+            return "You may not have permission to modify this playlist."
+        case .quotaExceeded:
+            return "Please wait a few minutes before trying again."
+
+        default:
+            return nil
+        }
+    }
+
+    /// Create SpotifyError from HTTP status code
+    static func fromStatusCode(_ code: Int, data: Data? = nil) -> SpotifyError? {
+        switch code {
+        case 200...299:
+            return nil
+        case 401:
+            return .tokenRefreshFailed
+        case 403:
+            return .permissionDenied(operation: "this action")
+        case 404:
+            return .playlistNotFound
+        case 429:
+            return .rateLimited(retryAfter: 5)
+        case 500...599:
+            return .serverError(statusCode: code)
+        default:
+            return .invalidResponse
+        }
+    }
+}
+
 // MARK: - Rate Limiter
 
-/// Manages API rate limiting with exponential backoff and retry logic
+/// Manages API rate limiting with exponential backoff and retry logic.
+///
+/// ## Why an Actor?
+///
+/// Rate limiting requires thread-safe mutable state (`retryAfter`, `consecutiveFailures`).
+/// When multiple concurrent API requests hit a 429 error simultaneously, they all need
+/// to update the same rate limit state without race conditions.
+///
+/// Swift's `actor` type guarantees:
+/// - All property access is serialized (only one caller at a time)
+/// - No data races, even with concurrent callers
+/// - Async methods automatically suspend callers until access is granted
+///
+/// ## Rate Limiting Strategy
+///
+/// ```
+/// ┌─────────────────────────────────────────────────────────────────────────┐
+/// │                         Request Flow                                    │
+/// ├─────────────────────────────────────────────────────────────────────────┤
+/// │                                                                         │
+/// │  Request → waitIfNeeded() ──┬── Rate limited? ─── Yes ──→ Sleep        │
+/// │                             │                             (retryAfter)  │
+/// │                             │                                           │
+/// │                             └── Apply min interval (100ms throttle)     │
+/// │                                                                         │
+/// │  Response ←── 429? ─── Yes ──→ handleRateLimit()                       │
+/// │                               - Parse Retry-After header               │
+/// │                               - Apply exponential backoff: 2^failures  │
+/// │                               - Set retryAfter date                    │
+/// │                                                                         │
+/// │  Success ──→ recordSuccess() ──→ Reset consecutiveFailures             │
+/// │                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────┘
+/// ```
+///
+/// ## Backoff Formula
+///
+/// `totalWait = retryAfterHeader × 2^(min(failures-1, 4))`
+///
+/// | Failures | Multiplier | If header says 1s |
+/// |----------|------------|-------------------|
+/// | 1        | 1×         | 1 second          |
+/// | 2        | 2×         | 2 seconds         |
+/// | 3        | 4×         | 4 seconds         |
+/// | 4        | 8×         | 8 seconds         |
+/// | 5+       | 16× (cap)  | 16 seconds        |
+///
 actor RateLimiter {
+    /// When the rate limit expires (nil if not rate limited)
     private var retryAfter: Date?
+
+    /// Consecutive 429 failures (for exponential backoff calculation)
     private var consecutiveFailures: Int = 0
+
+    /// Last request timestamp (for minimum interval enforcement)
     private var lastRequestTime: Date?
-    private let minRequestInterval: TimeInterval = 0.1 // 100ms between requests (~10/sec max)
+
+    /// Minimum time between requests (100ms = ~10 requests/second max)
+    private let minRequestInterval: TimeInterval = 0.1
+
+    /// Maximum retry attempts before giving up
     private let maxRetries: Int = 5
+
     private let logger = Logger(subsystem: "com.timor.spotify", category: "RateLimiter")
 
     /// Published state for UI feedback
@@ -48,7 +241,7 @@ actor RateLimiter {
         if let retryAfter = retryAfter {
             let waitTime = retryAfter.timeIntervalSince(Date())
             if waitTime > 0 {
-                logger.info("Rate limited, waiting \(waitTime, format: .fixed(precision: 1))s")
+                spotifyAPILogger.info("Rate limited, waiting \(waitTime, format: .fixed(precision: 1))s")
                 try await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
             }
             self.retryAfter = nil
@@ -91,7 +284,7 @@ actor RateLimiter {
         let totalWait = waitSeconds * backoffMultiplier
 
         retryAfter = Date().addingTimeInterval(totalWait)
-        logger.warning("Rate limited! Waiting \(totalWait, format: .fixed(precision: 1))s (failure #\(self.consecutiveFailures))")
+        spotifyAPILogger.warning("Rate limited! Waiting \(totalWait, format: .fixed(precision: 1))s (failure #\(self.consecutiveFailures))")
     }
 
     /// Reset failure count on successful request
@@ -125,7 +318,7 @@ actor RateLimiter {
                 case 429:
                     let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
                     handleRateLimit(retryAfterHeader: retryAfter)
-                    logger.info("Rate limit hit on attempt \(attempt + 1)/\(retries)")
+                    spotifyAPILogger.info("Rate limit hit on attempt \(attempt + 1)/\(retries)")
                     continue
 
                 case 500...599:
@@ -153,13 +346,65 @@ actor RateLimiter {
 }
 
 // MARK: - Certificate Pinning Delegate
+
+/// Implements certificate pinning for Spotify API connections.
+///
+/// ## Certificate Pinning Overview
+///
+/// Certificate pinning ensures the app only communicates with servers presenting
+/// certificates we explicitly trust, preventing man-in-the-middle attacks even if
+/// a rogue CA issues a fraudulent certificate for api.spotify.com.
+///
+/// ## Pinning Strategy
+///
+/// We pin to both the leaf certificate AND intermediate CA:
+/// - **Leaf pin**: Catches immediate certificate compromise
+/// - **Intermediate CA pin**: Survives routine leaf certificate rotation (typically annual)
+///
+/// ## Hash Extraction Process
+///
+/// To update these hashes when Spotify rotates certificates:
+/// ```bash
+/// # Get leaf certificate hash:
+/// echo | openssl s_client -servername api.spotify.com -connect api.spotify.com:443 2>/dev/null \
+///   | openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER \
+///   | openssl dgst -sha256 -hex | awk '{print $NF}'
+///
+/// # Get full chain hashes:
+/// openssl s_client -servername api.spotify.com -connect api.spotify.com:443 -showcerts 2>/dev/null \
+///   | # ... extract and hash each certificate
+/// ```
+///
+/// ## Failure Behavior
+///
+/// If pinning fails:
+/// 1. Connection is cancelled with `.cancelAuthenticationChallenge`
+/// 2. Error is logged (without exposing hash values to logs)
+/// 3. User sees a generic network error
+///
+/// - Warning: If Spotify rotates their intermediate CA, users will lose connectivity
+///   until the app is updated with new hashes. Monitor Spotify's certificate expiration.
 private class PinnedURLSessionDelegate: NSObject, URLSessionDelegate {
-    // Spotify API certificate public key hashes (SHA-256)
-    // These should be updated if Spotify rotates certificates
+    /// Logger for certificate pinning events (file-scoped to avoid MainActor issues)
+    private static let pinningLogger = Logger(subsystem: "com.timor", category: "certificate-pinning")
+
+    /// Spotify API certificate public key hashes (SHA-256 of SecKeyCopyExternalRepresentation output)
+    ///
+    /// Last verified: 2026-01-18 (extracted using SecKeyCopyExternalRepresentation + SHA256)
+    /// Both api.spotify.com and accounts.spotify.com share the same certificate chain.
+    ///
+    /// To update these hashes, run the hash extraction script in the project or check
+    /// Console.app logs (category: certificate-pinning) during DEBUG builds.
     private static let pinnedPublicKeyHashes: Set<String> = [
-        // Primary Spotify API certificate
-        // Note: In production, obtain these from Spotify's certificate chain
-        // For now, we'll use a permissive mode that still validates the chain
+        // Leaf certificate (api.spotify.com, accounts.spotify.com)
+        // Rotates most frequently - typically annually
+        "88b56ec2e245e6042cff85bab64e91872a6d7d7caff3af38582334d44dcba3b7",
+
+        // Intermediate CA certificate - more stable, survives leaf rotation
+        "ebf967039a1282fcd6aebe815e06e39f7b7cf05b3fc3768a7c24bc6fcb12a0cb",
+
+        // Root CA certificate - most stable, rarely changes
+        "93336939b223ecf6b3a33598be91ad79f8ab826693f8ac50cd827008eca78968",
     ]
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
@@ -175,36 +420,60 @@ private class PinnedURLSessionDelegate: NSObject, URLSessionDelegate {
         let isValid = SecTrustEvaluateWithError(serverTrust, &error)
 
         guard isValid else {
-            SpotifyWebAPI.logger.error("Certificate validation failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+            Self.pinningLogger.error("Certificate validation failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
 
-        // If we have pinned hashes, verify the public key
+        // If we have pinned hashes, verify at least one certificate in the chain matches
         if !Self.pinnedPublicKeyHashes.isEmpty {
-            guard let certificate = SecTrustGetCertificateAtIndex(serverTrust, 0) else {
+            // Use modern API (SecTrustCopyCertificateChain) available in macOS 12+
+            guard let certificates = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate] else {
                 completionHandler(.cancelAuthenticationChallenge, nil)
                 return
             }
 
-            // Extract public key and hash it
-            if let publicKey = SecCertificateCopyKey(certificate),
-               let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? {
-                let hash = SHA256.hash(data: publicKeyData)
-                let hashString = hash.compactMap { String(format: "%02x", $0) }.joined()
+            var foundMatch = false
 
-                if Self.pinnedPublicKeyHashes.contains(hashString) {
-                    completionHandler(.useCredential, URLCredential(trust: serverTrust))
-                    return
-                } else {
-                    SpotifyWebAPI.logger.error("Certificate pinning failed - hash mismatch")
-                    completionHandler(.cancelAuthenticationChallenge, nil)
-                    return
+            // Check all certificates in the chain (leaf + intermediates)
+            // This allows pinning to survive leaf certificate rotation
+            for certificate in certificates {
+                // Extract public key and hash it (SPKI hash)
+                if let publicKey = SecCertificateCopyKey(certificate),
+                   let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? {
+                    let hash = SHA256.hash(data: publicKeyData)
+                    let hashString = hash.compactMap { String(format: "%02x", $0) }.joined()
+
+                    if Self.pinnedPublicKeyHashes.contains(hashString) {
+                        foundMatch = true
+                        break
+                    }
+                }
+            }
+
+            if foundMatch {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            } else {
+                Self.pinningLogger.error("Certificate pinning failed - no matching hash in chain")
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
+            return
+        }
+
+        // Fallback: accept valid certificates (pinning disabled)
+        // Debug: Log the actual certificate hashes we see at runtime
+        #if DEBUG
+        if let certificates = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate] {
+            for (index, certificate) in certificates.enumerated() {
+                if let publicKey = SecCertificateCopyKey(certificate),
+                   let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? {
+                    let hash = SHA256.hash(data: publicKeyData)
+                    let hashString = hash.compactMap { String(format: "%02x", $0) }.joined()
+                    Self.pinningLogger.debug("Certificate[\(index)] hash: \(hashString, privacy: .public)")
                 }
             }
         }
-
-        // For now, accept valid certificates (pinning disabled until hashes configured)
+        #endif
         completionHandler(.useCredential, URLCredential(trust: serverTrust))
     }
 }
@@ -615,7 +884,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 )
             }
         } catch {
-            print("Error fetching playlists: \(error)")
+            spotifyAPILogger.error("Error fetching playlists: \(error)")
             return []
         }
     }
@@ -691,7 +960,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
             }
         }
 
-        print("Total tracks fetched: \(allTracks.count)")
+        spotifyAPILogger.debug("Total tracks fetched: \(allTracks.count)")
         return allTracks
     }
 
@@ -765,8 +1034,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
         guard let url = URL(string: "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)") else { return [] }
 
-        print("🔍 SEARCH QUERY: \(query)")
-        print("🔍 SEARCH URL: \(url.absoluteString)")
+        spotifyAPILogger.debug("Search query: \(query)")
+        spotifyAPILogger.debug("Search URL: \(url.absoluteString)")
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -776,7 +1045,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
             // Log the raw response
             if let responseString = String(data: data, encoding: .utf8) {
-                print("🔍 RESPONSE (first 500 chars): \(String(responseString.prefix(500)))")
+                spotifyAPILogger.debug("Search response (first 500 chars): \(String(responseString.prefix(500)))")
             }
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
@@ -844,7 +1113,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 }
             }
         } catch {
-            print("Error searching tracks: \(error)")
+            spotifyAPILogger.error("Error searching tracks: \(error)")
         }
 
         return []
@@ -869,13 +1138,13 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return ([], 0)
                     }
                 } else if httpResponse.statusCode == 200 {
-                    print("Fetching liked songs - offset: \(offset), limit: \(limit)")
+                    spotifyAPILogger.debug("Fetching liked songs - offset: \(offset), limit: \(limit)")
                     // Parse the response
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let items = json["items"] as? [[String: Any]],
                        let total = json["total"] as? Int {
 
-                        print("Found \(items.count) liked songs, total: \(total)")
+                        spotifyAPILogger.debug("Found \(items.count) liked songs, total: \(total)")
 
                         let tracks = items.compactMap { item -> SpotifyManager.Track? in
                             guard let track = item["track"] as? [String: Any],
@@ -932,7 +1201,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 }
             }
         } catch {
-            print("Error fetching liked songs: \(error)")
+            spotifyAPILogger.error("Error fetching liked songs: \(error)")
         }
 
         return ([], 0)
@@ -967,7 +1236,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 }
             }
         } catch {
-            print("Error checking saved tracks: \(error)")
+            spotifyAPILogger.error("Error checking saved tracks: \(error)")
         }
 
         return []
@@ -997,18 +1266,18 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return false
                     }
                 } else if httpResponse.statusCode == 200 || httpResponse.statusCode == 204 {
-                    print("Successfully saved tracks (status \(httpResponse.statusCode)): \(trackIds)")
+                    spotifyAPILogger.info("Successfully saved tracks (status \(httpResponse.statusCode)): \(trackIds)")
                     return true
                 } else {
-                    print("Failed to save tracks: HTTP \(httpResponse.statusCode) for IDs: \(trackIds)")
+                    spotifyAPILogger.error("Failed to save tracks: HTTP \(httpResponse.statusCode) for IDs: \(trackIds)")
                     if let errorString = String(data: data, encoding: .utf8) {
-                        print("Error response: \(errorString)")
+                        spotifyAPILogger.error("Error response: \(errorString)")
                     }
                     return false
                 }
             }
         } catch {
-            print("Error saving tracks: \(error)")
+            spotifyAPILogger.error("Error saving tracks: \(error)")
             return false
         }
 
@@ -1039,15 +1308,15 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return false
                     }
                 } else if httpResponse.statusCode == 200 || httpResponse.statusCode == 204 {
-                    print("Successfully removed saved tracks (status \(httpResponse.statusCode))")
+                    spotifyAPILogger.info("Successfully removed saved tracks (status \(httpResponse.statusCode))")
                     return true
                 } else {
-                    print("Failed to remove saved tracks: HTTP \(httpResponse.statusCode)")
+                    spotifyAPILogger.error("Failed to remove saved tracks: HTTP \(httpResponse.statusCode)")
                     return false
                 }
             }
         } catch {
-            print("Error removing saved tracks: \(error)")
+            spotifyAPILogger.error("Error removing saved tracks: \(error)")
             return false
         }
 
@@ -1074,15 +1343,15 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return false
                     }
                 } else if httpResponse.statusCode == 200 {
-                    print("Successfully unfollowed/deleted playlist")
+                    spotifyAPILogger.info("Successfully unfollowed/deleted playlist")
                     return true
                 } else {
-                    print("Failed to delete playlist: HTTP \(httpResponse.statusCode)")
+                    spotifyAPILogger.error("Failed to delete playlist: HTTP \(httpResponse.statusCode)")
                     return false
                 }
             }
         } catch {
-            print("Error deleting playlist: \(error)")
+            spotifyAPILogger.error("Error deleting playlist: \(error)")
             return false
         }
 
@@ -1127,19 +1396,19 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                     // Parse the created playlist ID from response
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let playlistId = json["id"] as? String {
-                        print("Successfully created playlist: \(name) with ID: \(playlistId)")
+                        spotifyAPILogger.info("Successfully created playlist: \(name) with ID: \(playlistId)")
                         return playlistId
                     }
                 } else {
-                    print("Failed to create playlist: HTTP \(httpResponse.statusCode)")
+                    spotifyAPILogger.error("Failed to create playlist: HTTP \(httpResponse.statusCode)")
                     if let errorString = String(data: data, encoding: .utf8) {
-                        print("Error response: \(errorString)")
+                        spotifyAPILogger.error("Error response: \(errorString)")
                     }
                     return nil
                 }
             }
         } catch {
-            print("Error creating playlist: \(error)")
+            spotifyAPILogger.error("Error creating playlist: \(error)")
             return nil
         }
 
@@ -1172,12 +1441,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 } else if httpResponse.statusCode == 201 {
                     return true
                 } else {
-                    print("Failed to add tracks: HTTP \(httpResponse.statusCode)")
+                    spotifyAPILogger.error("Failed to add tracks: HTTP \(httpResponse.statusCode)")
                     return false
                 }
             }
         } catch {
-            print("Error adding tracks to playlist: \(error)")
+            spotifyAPILogger.error("Error adding tracks to playlist: \(error)")
             return false
         }
 
@@ -1220,15 +1489,15 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return false
                     }
                 } else if httpResponse.statusCode == 200 {
-                    print("Successfully deleted tracks from playlist")
+                    spotifyAPILogger.info("Successfully deleted tracks from playlist")
                     return true
                 } else {
-                    print("Failed to delete tracks: HTTP \(httpResponse.statusCode)")
+                    spotifyAPILogger.error("Failed to delete tracks: HTTP \(httpResponse.statusCode)")
                     return false
                 }
             }
         } catch {
-            print("Error deleting tracks from playlist: \(error)")
+            spotifyAPILogger.error("Error deleting tracks from playlist: \(error)")
             return false
         }
 
@@ -1266,12 +1535,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 } else if httpResponse.statusCode == 200 {
                     return true
                 } else {
-                    print("Failed to reorder tracks: HTTP \(httpResponse.statusCode)")
+                    spotifyAPILogger.error("Failed to reorder tracks: HTTP \(httpResponse.statusCode)")
                     return false
                 }
             }
         } catch {
-            print("Error reordering playlist tracks: \(error)")
+            spotifyAPILogger.error("Error reordering playlist tracks: \(error)")
             return false
         }
 
@@ -1312,12 +1581,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                             return false
                         }
                     } else if httpResponse.statusCode != 200 && httpResponse.statusCode != 201 {
-                        print("Failed to update playlist: HTTP \(httpResponse.statusCode)")
+                        spotifyAPILogger.error("Failed to update playlist: HTTP \(httpResponse.statusCode)")
                         return false
                     }
                 }
             } catch {
-                print("Error updating playlist: \(error)")
+                spotifyAPILogger.error("Error updating playlist: \(error)")
                 return false
             }
         }

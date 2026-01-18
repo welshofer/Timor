@@ -66,7 +66,7 @@ struct ContentView: View {
         }
         .inspector(isPresented: $showInspector) {
             TrackInspectorView(track: selectedTrack)
-                .inspectorColumnWidth(min: 280, ideal: 280, max: 320)
+                .inspectorColumnWidth(min: Constants.UI.inspectorMinWidth, ideal: Constants.UI.inspectorIdealWidth, max: Constants.UI.inspectorMaxWidth)
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -140,9 +140,18 @@ struct ContentView: View {
         .alert("Error", isPresented: $spotifyManager.showError) {
             Button("OK") {
                 spotifyManager.showError = false
+                spotifyManager.lastError = nil
+                spotifyManager.lastErrorRecovery = nil
             }
         } message: {
-            Text(spotifyManager.lastError ?? "An unexpected error occurred")
+            VStack(alignment: .leading, spacing: 8) {
+                Text(spotifyManager.lastError ?? "An unexpected error occurred")
+                if let recovery = spotifyManager.lastErrorRecovery {
+                    Text(recovery)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }
@@ -284,5 +293,5 @@ struct DeleteTracksConfirmation: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: CachedPlaylist.self, inMemory: true)
 }

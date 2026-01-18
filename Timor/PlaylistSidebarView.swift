@@ -6,6 +6,10 @@
 //
 
 import SwiftUI
+import os.log
+
+// MARK: - Logging
+private nonisolated(unsafe) let logger = Logger(subsystem: "com.timor", category: "playlist-sidebar")
 
 struct PlaylistSidebarView: View {
     @ObservedObject var spotifyManager: SpotifyManager
@@ -41,12 +45,13 @@ struct PlaylistSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header with network status
             HStack {
                 Text("Spotify Playlists")
                     .font(.headline)
                     .foregroundColor(.secondary)
                 Spacer()
+                NetworkStatusIndicator(spotifyManager: spotifyManager)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -133,7 +138,7 @@ struct PlaylistSidebarView: View {
                 showOnlyEditablePlaylists: $showOnlyEditablePlaylists
             )
         }
-        .navigationSplitViewColumnWidth(min: 250, ideal: 300)
+        .navigationSplitViewColumnWidth(min: Constants.UI.sidebarMinWidth, ideal: Constants.UI.sidebarIdealWidth)
         .toolbar {
             if spotifyManager.isAuthenticated {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -200,6 +205,7 @@ struct LikedSongsRow: View {
                     HStack {
                         Image(systemName: "heart.fill")
                             .foregroundColor(.red)
+                            .accessibilityHidden(true)
                         Text("Liked Songs")
                             .font(.headline)
                     }
@@ -212,6 +218,7 @@ struct LikedSongsRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Liked Songs. Your liked tracks.")
         .listRowBackground(isViewingLikedSongs ? Color.accentColor.opacity(0.1) : Color.clear)
     }
 }
@@ -377,7 +384,7 @@ struct PlaylistRow: View {
 
             provider.loadDataRepresentation(forTypeIdentifier: "xsf.welshofer.Timor.spotifytrack") { data, error in
                 guard let data = data else {
-                    print("Drop failed: \(error?.localizedDescription ?? "No data")")
+                    logger.error("Drop failed: \(error?.localizedDescription ?? "No data")")
                     return
                 }
 
@@ -544,13 +551,13 @@ struct CreateFolderSheet: View {
     let onCreate: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Constants.UI.itemSpacing) {
             Text("Create New Folder")
                 .font(.headline)
 
             TextField("Folder Name", text: $folderName)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 250)
+                .frame(width: Constants.UI.sidebarMinWidth)
 
             HStack {
                 Button("Cancel") {
@@ -568,8 +575,8 @@ struct CreateFolderSheet: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(24)
-        .frame(minWidth: 300)
+        .padding(Constants.UI.largePadding)
+        .frame(minWidth: Constants.UI.editPlaylistMinWidth)
     }
 }
 
@@ -582,13 +589,13 @@ struct RenameFolderSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Constants.UI.itemSpacing) {
             Text("Rename Folder")
                 .font(.headline)
 
             TextField("Folder Name", text: $folderName)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 250)
+                .frame(width: Constants.UI.sidebarMinWidth)
 
             HStack {
                 Button("Cancel") {
@@ -604,7 +611,38 @@ struct RenameFolderSheet: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(24)
-        .frame(minWidth: 300)
+        .padding(Constants.UI.largePadding)
+        .frame(minWidth: Constants.UI.editPlaylistMinWidth)
+    }
+}
+
+// MARK: - Network Status Indicator
+
+/// Shows current network connectivity status
+struct NetworkStatusIndicator: View {
+    @ObservedObject var spotifyManager: SpotifyManager
+
+    var body: some View {
+        Group {
+            if !spotifyManager.isOnline {
+                // Offline indicator
+                HStack(spacing: 4) {
+                    Image(systemName: "wifi.slash")
+                        .font(.caption)
+                    Text("Offline")
+                        .font(.caption)
+                }
+                .foregroundStyle(.orange)
+                .help("No internet connection. Showing cached data.")
+            } else if spotifyManager.isUsingCache {
+                // Online but using cached data
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .help("Showing cached data. Click refresh to update.")
+            }
+        }
     }
 }

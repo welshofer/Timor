@@ -6,19 +6,53 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		130030FCA187F3104DFCB3DC /* SpotifyErrorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E271185B53F863B0F979B29A /* SpotifyErrorTests.swift */; };
+		3129DFBDCB8BA4570EAC5F4A /* TimorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8CBAF07F91F669B9BA4EB9 /* TimorTests.swift */; };
+		32D0AB3587919588C219C25B /* RateLimiterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1BE196357FE452008C2541 /* RateLimiterTests.swift */; };
+		3DC5C37AD15B7370034C0B1E /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E17F24E6C5B385893D813AEA /* Cocoa.framework */; };
+		3FD13D4F30159E8BA071DED3 /* PlaylistUndoManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 098683F8D9567894320E6BE6 /* PlaylistUndoManagerTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6B366D0C2F0B2A3CA36986EC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AFA6B0F42E84AA0800FAD721 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AFA6B0FB2E84AA0800FAD721;
+			remoteInfo = Timor;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		098683F8D9567894320E6BE6 /* PlaylistUndoManagerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaylistUndoManagerTests.swift; sourceTree = "<group>"; };
+		1E8CBAF07F91F669B9BA4EB9 /* TimorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimorTests.swift; sourceTree = "<group>"; };
+		4E04341DB5609A4F5CF1E821 /* TimorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TimorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6D1BE196357FE452008C2541 /* RateLimiterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RateLimiterTests.swift; sourceTree = "<group>"; };
 		AFA6B0FC2E84AA0800FAD721 /* Timor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Timor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E17F24E6C5B385893D813AEA /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		E271185B53F863B0F979B29A /* SpotifyErrorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpotifyErrorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AFA6B0FE2E84AA0800FAD721 /* Timor */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = Timor;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		56188D52BBCAE15676170CA5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3DC5C37AD15B7370034C0B1E /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AFA6B0F92E84AA0800FAD721 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -29,11 +63,33 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		23644621A6E26C832E3C8C28 /* TimorTests */ = {
+			isa = PBXGroup;
+			children = (
+				098683F8D9567894320E6BE6 /* PlaylistUndoManagerTests.swift */,
+				6D1BE196357FE452008C2541 /* RateLimiterTests.swift */,
+				1E8CBAF07F91F669B9BA4EB9 /* TimorTests.swift */,
+				E271185B53F863B0F979B29A /* SpotifyErrorTests.swift */,
+			);
+			name = TimorTests;
+			path = TimorTests;
+			sourceTree = SOURCE_ROOT;
+		};
+		46BC12CC6AFE9DCE8B44B355 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				E17F24E6C5B385893D813AEA /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
 		AFA6B0F32E84AA0800FAD721 = {
 			isa = PBXGroup;
 			children = (
 				AFA6B0FE2E84AA0800FAD721 /* Timor */,
 				AFA6B0FD2E84AA0800FAD721 /* Products */,
+				DA8084917D4B547AC8E25693 /* Frameworks */,
+				23644621A6E26C832E3C8C28 /* TimorTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -41,13 +97,40 @@
 			isa = PBXGroup;
 			children = (
 				AFA6B0FC2E84AA0800FAD721 /* Timor.app */,
+				4E04341DB5609A4F5CF1E821 /* TimorTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		DA8084917D4B547AC8E25693 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				46BC12CC6AFE9DCE8B44B355 /* OS X */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		66E30A13EF7547DD8ABAB4CF /* TimorTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B4F0B2980192A5C408190A21 /* Build configuration list for PBXNativeTarget "TimorTests" */;
+			buildPhases = (
+				E151AFD27BBC00F19F56A5EA /* Sources */,
+				56188D52BBCAE15676170CA5 /* Frameworks */,
+				646DA342FBF0F7AAE4F13A58 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				5E556DF78CAD0D62D9D25030 /* PBXTargetDependency */,
+			);
+			name = TimorTests;
+			productName = TimorTests;
+			productReference = 4E04341DB5609A4F5CF1E821 /* TimorTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		AFA6B0FB2E84AA0800FAD721 /* Timor */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AFA6B1092E84AA0900FAD721 /* Build configuration list for PBXNativeTarget "Timor" */;
@@ -64,8 +147,6 @@
 				AFA6B0FE2E84AA0800FAD721 /* Timor */,
 			);
 			name = Timor;
-			packageProductDependencies = (
-			);
 			productName = Timor;
 			productReference = AFA6B0FC2E84AA0800FAD721 /* Timor.app */;
 			productType = "com.apple.product-type.application";
@@ -94,19 +175,25 @@
 			);
 			mainGroup = AFA6B0F32E84AA0800FAD721;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AFA6B0FD2E84AA0800FAD721 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				AFA6B0FB2E84AA0800FAD721 /* Timor */,
+				66E30A13EF7547DD8ABAB4CF /* TimorTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		646DA342FBF0F7AAE4F13A58 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AFA6B0FA2E84AA0800FAD721 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -124,9 +211,45 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E151AFD27BBC00F19F56A5EA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3FD13D4F30159E8BA071DED3 /* PlaylistUndoManagerTests.swift in Sources */,
+				32D0AB3587919588C219C25B /* RateLimiterTests.swift in Sources */,
+				3129DFBDCB8BA4570EAC5F4A /* TimorTests.swift in Sources */,
+				130030FCA187F3104DFCB3DC /* SpotifyErrorTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		5E556DF78CAD0D62D9D25030 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Timor;
+			target = AFA6B0FB2E84AA0800FAD721 /* Timor */;
+			targetProxy = 6B366D0C2F0B2A3CA36986EC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		8FAB333518AF3D5346512152 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = QGNJVQUKK7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timor.TimorTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Timor.app/Contents/MacOS/Timor";
+			};
+			name = Release;
+		};
 		AFA6B1072E84AA0900FAD721 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -357,6 +480,22 @@
 			};
 			name = Release;
 		};
+		D4E21FCCC31DBB58B1A39772 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = QGNJVQUKK7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timor.TimorTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Timor.app/Contents/MacOS/Timor";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -374,6 +513,15 @@
 			buildConfigurations = (
 				AFA6B10A2E84AA0900FAD721 /* Debug */,
 				AFA6B10B2E84AA0900FAD721 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B4F0B2980192A5C408190A21 /* Build configuration list for PBXNativeTarget "TimorTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8FAB333518AF3D5346512152 /* Release */,
+				D4E21FCCC31DBB58B1A39772 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

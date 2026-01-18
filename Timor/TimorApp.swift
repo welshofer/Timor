@@ -14,7 +14,8 @@ struct TimorApp: App {
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            CachedPlaylist.self,
+            PlaylistFolder.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

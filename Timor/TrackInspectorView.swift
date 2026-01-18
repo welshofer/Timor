@@ -39,11 +39,14 @@ struct TrackInspectorView: View {
                             HStack {
                                 Image(systemName: "heart.fill")
                                     .foregroundColor(.red)
+                                    .accessibilityHidden(true)
                                 Text("Liked")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.top, 4)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Track is in your Liked Songs")
                         }
                     }
                 }
@@ -91,8 +94,9 @@ struct TrackInspectorView: View {
                 VStack {
                     Spacer()
                     Image(systemName: "music.note")
-                        .font(.system(size: 48))
+                        .font(.largeTitle)
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                     Text("No Track Selected")
                         .font(.headline)
                         .foregroundStyle(.secondary)
@@ -102,6 +106,8 @@ struct TrackInspectorView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("No track selected. Select a track to view details.")
             }
         }
         .padding()
@@ -230,13 +236,15 @@ struct AlbumArtModalView: View {
                         .frame(width: 640, height: 640)
                         .overlay(
                             Image(systemName: "photo")
-                                .font(.system(size: 72))
+                                .font(.title)
                                 .foregroundColor(.gray)
+                                .accessibilityHidden(true)
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
                             dismiss()
                         }
+                        .accessibilityLabel("No album art available. Tap to dismiss.")
                 }
 
                 // Track info

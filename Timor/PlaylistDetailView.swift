@@ -104,6 +104,7 @@ struct PlaylistHeader: View {
                         Image(systemName: "heart.fill")
                             .foregroundColor(.red)
                             .font(.largeTitle)
+                            .accessibilityHidden(true)
                     }
                     Text(isViewingLikedSongs ? "Liked Songs" : (selectedPlaylist?.name ?? ""))
                         .font(.largeTitle)

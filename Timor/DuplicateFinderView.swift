@@ -63,7 +63,7 @@ struct DuplicateFinderView: View {
             // Footer with actions
             footerView
         }
-        .frame(width: 600, height: 500)
+        .frame(width: Constants.UI.duplicateFinderWidth, height: Constants.UI.duplicateFinderHeight)
         .onAppear {
             findDuplicates()
         }
@@ -114,8 +114,9 @@ struct DuplicateFinderView: View {
         VStack(spacing: 16) {
             Spacer()
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 48))
+                .font(.largeTitle)
                 .foregroundStyle(.green)
+                .accessibilityHidden(true)
             Text("No Duplicates Found")
                 .font(.headline)
             Text("This playlist has no duplicate tracks.")
@@ -124,6 +125,8 @@ struct DuplicateFinderView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("No duplicates found. This playlist has no duplicate tracks.")
     }
 
     // MARK: - Duplicate List View
