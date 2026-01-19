@@ -180,16 +180,16 @@ struct TokenResponse: Codable {
 ```mermaid
 graph TB
     subgraph "Keychain Storage"
-        CID[Client ID<br/>Standard Protection]
-        CS[Client Secret<br/>High Protection]
-        AT[Access Token<br/>Standard Protection]
-        RT[Refresh Token<br/>High Protection]
-        EXP[Token Expiry<br/>Standard Protection]
+        CID["Client ID - Standard"]
+        CS["Client Secret - High"]
+        AT["Access Token - Standard"]
+        RT["Refresh Token - High"]
+        EXP["Token Expiry - Standard"]
     end
 
     subgraph "Protection Levels"
-        STD[kSecAttrAccessibleWhenUnlocked]
-        HIGH[kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        STD["kSecAttrAccessibleWhenUnlocked"]
+        HIGH["kSecAttrAccessibleWhenUnlockedThisDeviceOnly"]
     end
 
     CID --> STD

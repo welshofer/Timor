@@ -48,8 +48,8 @@ graph LR
     end
 
     subgraph "Protection"
-        STD[Standard<br/>WhenUnlocked]
-        HIGH[High<br/>WhenUnlockedThisDeviceOnly]
+        STD["Standard - WhenUnlocked"]
+        HIGH["High - WhenUnlockedThisDeviceOnly"]
     end
 
     CID --> STD

@@ -12,8 +12,8 @@ graph TB
     end
 
     subgraph "Cache Layer"
-        SD[(SwiftData<br/>Playlists & Tracks)]
-        MEM[(In-Memory<br/>Images)]
+        SD[("SwiftData: Playlists and Tracks")]
+        MEM[("In-Memory: Images")]
     end
 
     subgraph "External"

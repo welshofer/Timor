@@ -7,14 +7,14 @@ This document explains Timor's state management architecture using SwiftUI's obs
 ```mermaid
 graph TB
     subgraph "Observable Objects"
-        SM[SpotifyManager<br/>@StateObject]
-        SWAPI[SpotifyWebAPI<br/>@Published]
-        PUM[PlaylistUndoManager<br/>@Published]
+        SM["SpotifyManager (StateObject)"]
+        SWAPI["SpotifyWebAPI (Published)"]
+        PUM["PlaylistUndoManager (Published)"]
     end
 
     subgraph "View State"
-        CS[@State variables]
-        CB[@Binding props]
+        CS["State variables"]
+        CB["Binding props"]
     end
 
     subgraph "Persistence"
@@ -257,23 +257,23 @@ struct PlaylistDetailView: View {
 
 ```mermaid
 graph TB
-    subgraph "ContentView (@StateObject)"
+    subgraph "ContentView (StateObject)"
         SM[spotifyManager]
-        SP[@State selectedPlaylist]
-        ST[@State searchText]
-        STR[@State selectedTracks]
+        SP["State: selectedPlaylist"]
+        ST["State: searchText"]
+        STR["State: selectedTracks"]
     end
 
     subgraph "PlaylistSidebarView"
-        SM1[spotifyManager: @ObservedObject]
-        SP1[selectedPlaylist: @Binding]
+        SM1["spotifyManager: ObservedObject"]
+        SP1["selectedPlaylist: Binding"]
     end
 
     subgraph "PlaylistDetailView"
-        SM2[spotifyManager: @ObservedObject]
-        SP2[selectedPlaylist: let]
-        ST2[searchText: @Binding]
-        STR2[selectedTracks: @Binding]
+        SM2["spotifyManager: ObservedObject"]
+        SP2["selectedPlaylist: let"]
+        ST2["searchText: Binding"]
+        STR2["selectedTracks: Binding"]
     end
 
     SM -->|ObservedObject| SM1
