@@ -6,8 +6,15 @@
 //
 
 import Foundation
-import AppKit
 import os.log
+
+#if os(macOS)
+import AppKit
+public typealias PlatformImage = NSImage
+#else
+import UIKit
+public typealias PlatformImage = UIImage
+#endif
 
 /// Thread-safe image cache with configurable memory limits
 final class ImageCache: @unchecked Sendable {
@@ -17,7 +24,7 @@ final class ImageCache: @unchecked Sendable {
 
     // MARK: - Cache Configuration
 
-    private let memoryCache: NSCache<NSString, NSImage>
+    private let memoryCache: NSCache<NSString, PlatformImage>
     private let cacheDirectory: URL?
     private let fileManager = FileManager.default
     private let ioQueue = DispatchQueue(label: "com.timor.imagecache.io", qos: .utility)
@@ -35,7 +42,7 @@ final class ImageCache: @unchecked Sendable {
     private let diskCacheExpiry: TimeInterval = 7 * 24 * 60 * 60
 
     private init() {
-        memoryCache = NSCache<NSString, NSImage>()
+        memoryCache = NSCache<NSString, PlatformImage>()
         memoryCache.countLimit = maxMemoryCount
         memoryCache.totalCostLimit = maxMemoryCost
 
@@ -55,7 +62,7 @@ final class ImageCache: @unchecked Sendable {
     // MARK: - Public API
 
     /// Retrieves an image from cache, checking memory first then disk
-    func image(for url: String) -> NSImage? {
+    func image(for url: String) -> PlatformImage? {
         let key = cacheKey(for: url)
 
         // Check memory cache first (fast path)
@@ -77,7 +84,7 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Fetches an image from the network, using cache when available
-    func image(from urlString: String) async -> NSImage? {
+    func image(from urlString: String) async -> PlatformImage? {
         // Check cache first
         if let cached = image(for: urlString) {
             return cached
@@ -91,7 +98,7 @@ final class ImageCache: @unchecked Sendable {
 
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200,
-                  let image = NSImage(data: data) else {
+                  let image = PlatformImage(data: data) else {
                 return nil
             }
 
@@ -107,7 +114,7 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Stores an image in both memory and disk cache
-    func store(_ image: NSImage, for url: String) {
+    func store(_ image: PlatformImage, for url: String) {
         let key = cacheKey(for: url)
         let cost = estimateImageCost(image)
 
@@ -151,10 +158,16 @@ final class ImageCache: @unchecked Sendable {
         return hash.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func estimateImageCost(_ image: NSImage) -> Int {
+    private func estimateImageCost(_ image: PlatformImage) -> Int {
+        #if os(macOS)
         // Estimate memory cost based on image dimensions
         guard let rep = image.representations.first else { return 0 }
         return rep.pixelsWide * rep.pixelsHigh * 4 // RGBA
+        #else
+        // iOS: use CGImage dimensions
+        guard let cgImage = image.cgImage else { return 0 }
+        return cgImage.width * cgImage.height * 4 // RGBA
+        #endif
     }
 
     private func createCacheDirectoryIfNeeded() {
@@ -172,7 +185,7 @@ final class ImageCache: @unchecked Sendable {
         cacheDirectory?.appendingPathComponent(key).appendingPathExtension("png")
     }
 
-    private func loadFromDisk(key: String) -> NSImage? {
+    private func loadFromDisk(key: String) -> PlatformImage? {
         guard let path = diskPath(for: key),
               fileManager.fileExists(atPath: path.path) else {
             return nil
@@ -188,16 +201,25 @@ final class ImageCache: @unchecked Sendable {
             }
         }
 
+        #if os(macOS)
         return NSImage(contentsOf: path)
+        #else
+        return UIImage(contentsOfFile: path.path)
+        #endif
     }
 
-    private func saveToDisk(image: NSImage, key: String) {
-        guard let path = diskPath(for: key),
-              let tiffData = image.tiffRepresentation,
+    private func saveToDisk(image: PlatformImage, key: String) {
+        guard let path = diskPath(for: key) else { return }
+
+        #if os(macOS)
+        guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData),
               let pngData = bitmap.representation(using: .png, properties: [:]) else {
             return
         }
+        #else
+        guard let pngData = image.pngData() else { return }
+        #endif
 
         do {
             try pngData.write(to: path)

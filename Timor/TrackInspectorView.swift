@@ -9,7 +9,7 @@ import SwiftUI
 
 struct TrackInspectorView: View {
     let track: SpotifyManager.Track?
-    @State private var albumArtImage: NSImage?
+    @State private var albumArtImage: PlatformImage?
     @State private var isLoadingImage = false
     @State private var showingAlbumArtModal = false
     @State private var currentImageURL: String?
@@ -59,7 +59,7 @@ struct TrackInspectorView: View {
                     VStack {
                         Divider()
 
-                        Image(nsImage: albumArtImage)
+                        platformImage(albumArtImage)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(width: 200, height: 200)
@@ -68,7 +68,9 @@ struct TrackInspectorView: View {
                             .onTapGesture(count: 2) {
                                 showingAlbumArtModal = true
                             }
+                            #if os(macOS)
                             .help("Double-click to view full size")
+                            #endif
                     }
                 } else if isLoadingImage {
                     VStack {
@@ -200,7 +202,7 @@ struct DetailRow: View {
 }
 
 struct AlbumArtModalView: View {
-    let albumArtImage: NSImage?
+    let albumArtImage: PlatformImage?
     let trackName: String
     let artistName: String
     let albumName: String
@@ -216,7 +218,7 @@ struct AlbumArtModalView: View {
 
             VStack(spacing: 16) {
                 if let albumArtImage = albumArtImage {
-                    Image(nsImage: albumArtImage)
+                    platformImage(albumArtImage)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 640, height: 640)
@@ -279,4 +281,16 @@ struct AlbumArtModalView: View {
         albumArtURL: nil,
         isLiked: true
     ))
+}
+
+// MARK: - Cross-Platform Image Helper
+
+/// Creates a SwiftUI Image from a platform-specific image type
+@ViewBuilder
+func platformImage(_ image: PlatformImage) -> Image {
+    #if os(macOS)
+    Image(nsImage: image)
+    #else
+    Image(uiImage: image)
+    #endif
 }

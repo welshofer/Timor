@@ -7,6 +7,12 @@
 
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
 struct TrackSearchView: View {
     @Binding var isPresented: Bool
     let playlistId: String
@@ -21,6 +27,7 @@ struct TrackSearchView: View {
     @State private var isSearching = false
     @State private var isAdding = false
     @State private var sortOrder = [KeyPathComparator(\SpotifyManager.Track.name)]
+    @State private var showAddError = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,7 +100,11 @@ struct TrackSearchView: View {
                 }
             }
             .padding()
+            #if os(macOS)
             .background(Color(NSColor.controlBackgroundColor))
+            #else
+            .background(Color(UIColor.secondarySystemBackground))
+            #endif
 
             Divider()
 
@@ -110,7 +121,11 @@ struct TrackSearchView: View {
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 4)
+                #if os(macOS)
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+                #else
+                .background(Color(UIColor.secondarySystemBackground).opacity(0.5))
+                #endif
             }
 
             // Results table
@@ -175,6 +190,11 @@ struct TrackSearchView: View {
             .padding()
         }
         .frame(width: 800, height: 600)
+        .alert("Failed to Add Tracks", isPresented: $showAddError) {
+            Button("OK") { }
+        } message: {
+            Text("Could not add the selected tracks to the playlist. Please try again.")
+        }
     }
 
     private func performSearch() {
@@ -216,13 +236,7 @@ struct TrackSearchView: View {
                     SpotifyManager.shared.fetchTracksForPlaylist(playlistId)
                     isPresented = false
                 } else {
-                    // Show error
-                    let alert = NSAlert()
-                    alert.messageText = "Failed to Add Tracks"
-                    alert.informativeText = "Could not add the selected tracks to the playlist. Please try again."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
+                    showAddError = true
                 }
                 isAdding = false
             }

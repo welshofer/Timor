@@ -8,6 +8,12 @@
 import SwiftUI
 import os.log
 
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
 // MARK: - Logging
 private nonisolated(unsafe) let logger = Logger(subsystem: "com.timor", category: "playlist-sidebar")
 
@@ -19,11 +25,15 @@ struct PlaylistSidebarView: View {
     @Binding var selectedTracks: Set<SpotifyManager.Track.ID>
     @Binding var showOnlyEditablePlaylists: Bool
     @Binding var showCreatePlaylist: Bool
+    @Binding var showSettings: Bool
 
     @State private var showCreateFolder = false
     @State private var newFolderName = ""
     @State private var folderToRename: PlaylistFolder?
     @State private var renameFolderText = ""
+    @State private var playlistToDelete: SpotifyManager.Playlist?
+    @State private var showDeleteConfirmation = false
+    @State private var showDeleteError = false
 
     var filteredPlaylists: [SpotifyManager.Playlist] {
         if showOnlyEditablePlaylists {
@@ -85,6 +95,7 @@ struct PlaylistSidebarView: View {
                             onSelectPlaylist: { playlist in
                                 selectPlaylist(playlist)
                             },
+                            onDeletePlaylist: { playlistToDelete = $0; showDeleteConfirmation = true },
                             onRenameFolder: {
                                 folderToRename = folder
                                 renameFolderText = folder.name
@@ -110,6 +121,7 @@ struct PlaylistSidebarView: View {
                                     onSelect: {
                                         selectPlaylist(playlist)
                                     },
+                                    onDelete: { playlistToDelete = $0; showDeleteConfirmation = true },
                                     spotifyManager: spotifyManager
                                 )
                             }
@@ -140,6 +152,15 @@ struct PlaylistSidebarView: View {
         }
         .navigationSplitViewColumnWidth(min: Constants.UI.sidebarMinWidth, ideal: Constants.UI.sidebarIdealWidth)
         .toolbar {
+            #if os(iOS)
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+            }
+            #endif
             if spotifyManager.isAuthenticated {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button(action: { showCreateFolder = true }) {
@@ -178,6 +199,29 @@ struct PlaylistSidebarView: View {
                     folderToRename = nil
                 }
             )
+        }
+        .confirmationDialog(
+            "Delete Playlist?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible,
+            presenting: playlistToDelete
+        ) { playlist in
+            Button("Delete", role: .destructive) {
+                Task {
+                    let success = await SpotifyManager.shared.deletePlaylist(playlist.id)
+                    if !success {
+                        showDeleteError = true
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { playlist in
+            Text("Are you sure you want to delete \"\(playlist.name)\"? This cannot be undone.")
+        }
+        .alert("Failed to Delete", isPresented: $showDeleteError) {
+            Button("OK") { }
+        } message: {
+            Text("Could not delete the playlist. Please try again.")
         }
     }
 
@@ -231,6 +275,7 @@ struct FolderSection: View {
     let selectedPlaylist: SpotifyManager.Playlist?
     let currentPlaylistId: String?
     let onSelectPlaylist: (SpotifyManager.Playlist) -> Void
+    let onDeletePlaylist: (SpotifyManager.Playlist) -> Void
     let onRenameFolder: () -> Void
     let onDeleteFolder: () -> Void
     let onToggleExpand: () -> Void
@@ -251,6 +296,7 @@ struct FolderSection: View {
                     onSelect: {
                         onSelectPlaylist(playlist)
                     },
+                    onDelete: onDeletePlaylist,
                     spotifyManager: spotifyManager
                 )
             }
@@ -309,15 +355,17 @@ struct PlaylistRow: View {
     let isSelected: Bool
     let currentPlaylistId: String?
     let onSelect: () -> Void
+    let onDelete: (SpotifyManager.Playlist) -> Void
     let spotifyManager: SpotifyManager
 
     @State private var isDropTargeted = false
 
-    init(playlist: SpotifyManager.Playlist, isSelected: Bool, currentPlaylistId: String? = nil, onSelect: @escaping () -> Void, spotifyManager: SpotifyManager) {
+    init(playlist: SpotifyManager.Playlist, isSelected: Bool, currentPlaylistId: String? = nil, onSelect: @escaping () -> Void, onDelete: @escaping (SpotifyManager.Playlist) -> Void = { _ in }, spotifyManager: SpotifyManager) {
         self.playlist = playlist
         self.isSelected = isSelected
         self.currentPlaylistId = currentPlaylistId
         self.onSelect = onSelect
+        self.onDelete = onDelete
         self.spotifyManager = spotifyManager
     }
 
@@ -434,34 +482,9 @@ struct PlaylistRow: View {
 
             if playlist.isEditable {
                 Button(role: .destructive) {
-                    deletePlaylist(playlist)
+                    onDelete(playlist)
                 } label: {
                     Label("Delete Playlist", systemImage: "trash")
-                }
-            }
-        }
-    }
-
-    private func deletePlaylist(_ playlist: SpotifyManager.Playlist) {
-        Task {
-            let alert = NSAlert()
-            alert.messageText = "Delete Playlist?"
-            alert.informativeText = "Are you sure you want to delete \"\(playlist.name)\"? This cannot be undone."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Delete")
-            alert.addButton(withTitle: "Cancel")
-
-            if alert.runModal() == .alertFirstButtonReturn {
-                let success = await SpotifyManager.shared.deletePlaylist(playlist.id)
-                if !success {
-                    await MainActor.run {
-                        let errorAlert = NSAlert()
-                        errorAlert.messageText = "Failed to Delete"
-                        errorAlert.informativeText = "Could not delete the playlist. Please try again."
-                        errorAlert.alertStyle = .warning
-                        errorAlert.addButton(withTitle: "OK")
-                        errorAlert.runModal()
-                    }
                 }
             }
         }
@@ -521,9 +544,9 @@ struct SpotifyControlsView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .disabled(spotifyManager.clientID.isEmpty || spotifyManager.clientSecret.isEmpty)
-                
-                if spotifyManager.clientID.isEmpty || spotifyManager.clientSecret.isEmpty {
+                .disabled(!spotifyManager.hasCredentials)
+
+                if !spotifyManager.hasCredentials {
                     Text("Configure Client ID and Secret in Preferences first")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -539,7 +562,11 @@ struct SpotifyControlsView: View {
             }
         }
         .padding(12)
+        #if os(macOS)
         .background(Color(NSColor.controlBackgroundColor))
+        #else
+        .background(Color(UIColor.secondarySystemBackground))
+        #endif
     }
 }
 

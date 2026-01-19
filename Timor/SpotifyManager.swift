@@ -9,7 +9,11 @@ import Foundation
 import SwiftUI
 import Combine
 import TabularData
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import UniformTypeIdentifiers
 import SwiftData
 import os.log
@@ -92,9 +96,16 @@ class SpotifyManager: ObservableObject {
     @Published var isUsingCache = false
     @Published var modelContainerFailed = false
 
+    /// Export status for cross-platform alert handling
+    @Published var exportSuccess: Bool?
+    @Published var exportMessage: String?
+
     /// Network connectivity state
     @Published var isOnline = true
     @Published var connectionType: ConnectionType = .unknown
+
+    /// Tracks whether credentials are configured (for UI reactivity)
+    @Published var hasCredentials = false
 
     enum ConnectionType {
         case unknown
@@ -157,6 +168,7 @@ class SpotifyManager: ObservableObject {
         setupModelContainer()
         setupWebAPIObserver()
         setupNetworkMonitor()
+        updateHasCredentials()
     }
 
     deinit {
@@ -294,7 +306,13 @@ class SpotifyManager: ObservableObject {
             (try? keychain.retrieve(for: Constants.Keychain.clientIdKey)) ?? ""
         }
         set {
-            try? keychain.save(newValue, for: Constants.Keychain.clientIdKey)
+            do {
+                try keychain.save(newValue, for: Constants.Keychain.clientIdKey)
+                Self.logger.info("Successfully saved clientID to keychain")
+                updateHasCredentials()
+            } catch {
+                Self.logger.error("Failed to save clientID to keychain: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -303,8 +321,19 @@ class SpotifyManager: ObservableObject {
             (try? keychain.retrieve(for: Constants.Keychain.clientSecretKey)) ?? ""
         }
         set {
-            try? keychain.save(newValue, for: Constants.Keychain.clientSecretKey)
+            do {
+                try keychain.save(newValue, for: Constants.Keychain.clientSecretKey)
+                Self.logger.info("Successfully saved clientSecret to keychain")
+                updateHasCredentials()
+            } catch {
+                Self.logger.error("Failed to save clientSecret to keychain: \(error.localizedDescription)")
+            }
         }
+    }
+
+    /// Updates the hasCredentials published property for UI reactivity
+    private func updateHasCredentials() {
+        hasCredentials = !clientID.isEmpty && !clientSecret.isEmpty
     }
 
     var redirectURI: String {
@@ -845,7 +874,7 @@ class SpotifyManager: ObservableObject {
             self.currentPlaylistTracks = []  // Always clear current tracks first
 
             // First, try to load from cache WITH VALIDATION (unless force refresh)
-            if !forceRefresh, let cachedTracks = await self.loadCachedTracks(for: playlistId, operation: operation) {
+            if !forceRefresh, let cachedTracks = self.loadCachedTracks(for: playlistId, operation: operation) {
                 // ATOMIC VALIDATE: Check operation is still current
                 guard isOperationValid() else {
                     Self.logger.info("Playlist changed during cache load, discarding results")
@@ -900,7 +929,7 @@ class SpotifyManager: ObservableObject {
                     Self.logger.warning("API returned empty tracks but expected \(expectedTracks)")
 
                     // Try to load from cache as fallback
-                    if let cachedTracks = await self.loadCachedTracks(for: playlistId, operation: operation), !cachedTracks.isEmpty {
+                    if let cachedTracks = self.loadCachedTracks(for: playlistId, operation: operation), !cachedTracks.isEmpty {
                         Self.logger.info("Using cached tracks as fallback (\(cachedTracks.count) tracks)")
                         self.currentPlaylistTracks = cachedTracks
                         self.isLoadingTracks = false
@@ -945,7 +974,9 @@ class SpotifyManager: ObservableObject {
         }
     }
 
-    private func loadCachedTracks(for playlistId: String, operation: PlaylistLoadOperation? = nil) async -> [Track]? {
+    /// Loads cached tracks for a playlist from SwiftData.
+    /// This is a synchronous operation that must run on MainActor since SwiftData's ModelContext is not thread-safe.
+    private func loadCachedTracks(for playlistId: String, operation: PlaylistLoadOperation? = nil) -> [Track]? {
         guard let modelContext = modelContext else { return nil }
 
         // CRITICAL: Verify operation is still valid if provided
@@ -979,10 +1010,10 @@ class SpotifyManager: ObservableObject {
 
                 Self.logger.info("Loading \(tracks.count) cached tracks for playlist: \(cachedPlaylist.name, privacy: .public)")
 
-                // Return tracks sorted by position
-                return tracks
-                    .sorted { $0.position < $1.position }
-                    .map { $0.toTrack() }
+                // Convert to Track objects immediately while still on MainActor
+                // This avoids SwiftData threading issues by not holding CachedTrack references
+                let sortedTracks = tracks.sorted { $0.position < $1.position }
+                return sortedTracks.map { $0.toTrack() }
             }
         } catch {
             spotifyLogger.error("Failed to load cached tracks: \(error)")
@@ -1432,6 +1463,7 @@ class SpotifyManager: ObservableObject {
         }
     }
 
+    #if os(macOS)
     func exportPlaylistToCSV(playlistName: String) {
         // This function is already @MainActor, no need for thread check
 
@@ -1477,27 +1509,24 @@ class SpotifyManager: ObservableObject {
                         try dataFrame.writeCSV(to: url)
                         spotifyLogger.info("Successfully exported playlist to: \(url.path)")
 
-                        // Show success message
-                        let alert = NSAlert()
-                        alert.messageText = "Export Successful"
-                        alert.informativeText = "Playlist exported to: \(url.lastPathComponent)"
-                        alert.alertStyle = .informational
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
+                        // Notify success via published property
+                        await MainActor.run {
+                            self.exportSuccess = true
+                            self.exportMessage = "Playlist exported to: \(url.lastPathComponent)"
+                        }
                     } catch {
                         spotifyLogger.error("Error exporting CSV: \(error)")
-                        // Show error alert
-                        let alert = NSAlert()
-                        alert.messageText = "Export Failed"
-                        alert.informativeText = "Failed to export playlist: \(error.localizedDescription)"
-                        alert.alertStyle = .warning
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
+                        // Notify failure via published property
+                        await MainActor.run {
+                            self.exportSuccess = false
+                            self.exportMessage = "Failed to export playlist: \(error.localizedDescription)"
+                        }
                     }
                 }
             }
         }
     }
+    #endif
 
     // MARK: - Playlist Folders
 

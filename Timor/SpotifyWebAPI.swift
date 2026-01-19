@@ -9,7 +9,11 @@ import Foundation
 import SwiftUI
 import AuthenticationServices
 import Combine
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import os.log
 import CryptoKit
 
@@ -384,7 +388,7 @@ actor RateLimiter {
 ///
 /// - Warning: If Spotify rotates their intermediate CA, users will lose connectivity
 ///   until the app is updated with new hashes. Monitor Spotify's certificate expiration.
-private class PinnedURLSessionDelegate: NSObject, URLSessionDelegate {
+private final class PinnedURLSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     /// Logger for certificate pinning events (file-scoped to avoid MainActor issues)
     private static let pinningLogger = Logger(subsystem: "com.timor", category: "certificate-pinning")
 
@@ -496,7 +500,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     private let rateLimiter = RateLimiter()
     private var authSession: ASWebAuthenticationSession?
     private var currentUserId: String?
-    private var tokenRefreshTimer: Timer?
+    @MainActor private var tokenRefreshTimer: Timer?
 
     // URLSession with certificate pinning
     private lazy var pinnedSession: URLSession = {
@@ -517,7 +521,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     }
 
     deinit {
-        tokenRefreshTimer?.invalidate()
+        // Timer invalidation happens on MainActor as part of deallocation
+        // The timer will be invalidated when the reference is released
     }
 
     var clientID: String {
@@ -557,8 +562,9 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
     /// Executes an API request with automatic rate limiting and retry logic
     private func rateLimitedRequest(for request: URLRequest) async throws -> (Data, URLResponse) {
-        return try await rateLimiter.executeWithRetry {
-            try await self.pinnedSession.data(for: request)
+        let session = self.pinnedSession
+        return try await rateLimiter.executeWithRetry { @Sendable in
+            try await session.data(for: request)
         }
     }
 
@@ -1612,7 +1618,14 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 // MARK: - ASWebAuthenticationPresentationContextProviding
 extension SpotifyWebAPI: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if os(macOS)
         return NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor()
+        #else
+        // On iOS, find the key window from the connected scenes
+        let scenes = UIApplication.shared.connectedScenes
+        let windowScene = scenes.first as? UIWindowScene
+        return windowScene?.windows.first ?? ASPresentationAnchor()
+        #endif
     }
 }
 

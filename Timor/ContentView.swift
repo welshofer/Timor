@@ -30,7 +30,8 @@ struct ContentView: View {
     @State private var showDuplicateFinder = false
     @State private var showImport = false
     @State private var showStats = false
-    
+    @State private var showDeleteError = false
+
     var body: some View {
         NavigationSplitView {
             PlaylistSidebarView(
@@ -40,7 +41,8 @@ struct ContentView: View {
                 searchText: $searchText,
                 selectedTracks: $selectedTracks,
                 showOnlyEditablePlaylists: $showOnlyEditablePlaylists,
-                showCreatePlaylist: $showCreatePlaylist
+                showCreatePlaylist: $showCreatePlaylist,
+                showSettings: $showingSettings
             )
         } detail: {
             if selectedPlaylist != nil || isViewingLikedSongs {
@@ -69,7 +71,13 @@ struct ContentView: View {
                 .inspectorColumnWidth(min: Constants.UI.inspectorMinWidth, ideal: Constants.UI.inspectorIdealWidth, max: Constants.UI.inspectorMaxWidth)
         }
         .sheet(isPresented: $showingSettings) {
+            #if os(macOS)
             SettingsView()
+            #else
+            NavigationStack {
+                SettingsView()
+            }
+            #endif
         }
         .sheet(isPresented: $showTrackSearch) {
             if let playlist = selectedPlaylist {
@@ -132,10 +140,16 @@ struct ContentView: View {
                 selectedTracks: selectedTracks,
                 selectedPlaylist: selectedPlaylist,
                 spotifyManager: spotifyManager,
-                isDeleting: $isDeleting
+                isDeleting: $isDeleting,
+                showDeleteError: $showDeleteError
             )
         } message: {
             Text("This will permanently remove the selected track\(selectedTracks.count == 1 ? "" : "s") from your Spotify playlist. This action cannot be undone.")
+        }
+        .alert("Delete Failed", isPresented: $showDeleteError) {
+            Button("OK") { }
+        } message: {
+            Text("Failed to delete tracks from playlist. Please try again.")
         }
         .alert("Error", isPresented: $spotifyManager.showError) {
             Button("OK") {
@@ -172,7 +186,8 @@ struct CreatePlaylistSheet: View {
     @Binding var isCreatingPlaylist: Bool
     @ObservedObject var spotifyManager: SpotifyManager
     @Binding var selectedPlaylist: SpotifyManager.Playlist?
-    
+    @State private var showCreateError = false
+
     var body: some View {
         VStack(spacing: 20) {
             Text("Create New Playlist")
@@ -216,6 +231,11 @@ struct CreatePlaylistSheet: View {
         }
         .padding()
         .frame(width: Constants.UI.createPlaylistWidth, height: Constants.UI.createPlaylistHeight)
+        .alert("Failed to Create Playlist", isPresented: $showCreateError) {
+            Button("OK") { }
+        } message: {
+            Text("Could not create the playlist. Please try again.")
+        }
     }
     
     private func createPlaylist() {
@@ -233,7 +253,7 @@ struct CreatePlaylistSheet: View {
                     newPlaylistName = ""
                     newPlaylistDescription = ""
                     isPresented = false
-                    
+
                     Task {
                         try? await Task.sleep(nanoseconds: Constants.Animation.shuffleDelay)
                         if let newPlaylist = spotifyManager.playlists.first(where: { $0.name == playlistNameToSelect }) {
@@ -243,12 +263,7 @@ struct CreatePlaylistSheet: View {
                         }
                     }
                 } else {
-                    let alert = NSAlert()
-                    alert.messageText = "Failed to Create Playlist"
-                    alert.informativeText = "Could not create the playlist. Please try again."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
+                    showCreateError = true
                 }
             }
         }
@@ -260,31 +275,27 @@ struct DeleteTracksConfirmation: View {
     let selectedPlaylist: SpotifyManager.Playlist?
     let spotifyManager: SpotifyManager
     @Binding var isDeleting: Bool
-    
+    @Binding var showDeleteError: Bool
+
     var body: some View {
         Button("Delete \(selectedTracks.count) track\(selectedTracks.count == 1 ? "" : "s")", role: .destructive) {
             deleteSelectedTracks()
         }
         Button("Cancel", role: .cancel) { }
     }
-    
+
     private func deleteSelectedTracks() {
         Task {
             guard let playlist = selectedPlaylist else { return }
             isDeleting = true
-            
+
             let tracksToDelete = Set(spotifyManager.currentPlaylistTracks.filter { selectedTracks.contains($0.id) })
             let success = await spotifyManager.deleteTracksFromPlaylist(playlist.id, tracks: tracksToDelete)
             isDeleting = false
-            
+
             if !success {
                 await MainActor.run {
-                    let alert = NSAlert()
-                    alert.messageText = "Delete Failed"
-                    alert.informativeText = "Failed to delete tracks from playlist. Please try again."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
+                    showDeleteError = true
                 }
             }
         }

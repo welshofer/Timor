@@ -285,7 +285,9 @@ struct TrackFilterView: View {
                                         .font(.caption)
                                         .lineLimit(1)
                                 }
+                                #if os(macOS)
                                 .toggleStyle(.checkbox)
+                                #endif
                             }
                         }
                     }

@@ -49,12 +49,13 @@ struct PlaylistDetailView: View {
             
             Divider()
             
-            // Tracks table content
+            // Tracks content - Table on macOS, List on iOS for drag reorder
             if spotifyManager.isLoadingTracks {
                 LoadingTracksView(spotifyManager: spotifyManager)
             } else if spotifyManager.currentPlaylistTracks.isEmpty {
                 EmptyPlaylistView()
             } else {
+                #if os(macOS)
                 TrackTableView(
                     spotifyManager: spotifyManager,
                     playlist: selectedPlaylist,
@@ -63,6 +64,16 @@ struct PlaylistDetailView: View {
                     showDeleteConfirmation: $showDeleteConfirmation,
                     selectedTrack: $selectedTrack
                 )
+                #else
+                TrackListView(
+                    spotifyManager: spotifyManager,
+                    playlist: selectedPlaylist,
+                    selectedTracks: $selectedTracks,
+                    searchText: $searchText,
+                    showDeleteConfirmation: $showDeleteConfirmation,
+                    selectedTrack: $selectedTrack
+                )
+                #endif
             }
         }
         .searchable(text: $searchText, placement: .toolbarPrincipal, prompt: "Search tracks")
@@ -289,6 +300,7 @@ struct PlaylistToolbar: ToolbarContent {
                     }
                     .help("Find and remove duplicate tracks")
 
+                    #if os(macOS)
                     Button {
                         let playlistName = selectedPlaylist?.name ?? "Liked Songs"
                         spotifyManager.exportPlaylistToCSV(playlistName: playlistName)
@@ -296,6 +308,7 @@ struct PlaylistToolbar: ToolbarContent {
                         Label("Export", systemImage: "square.and.arrow.down")
                     }
                     .help("Export to CSV file")
+                    #endif
 
                     if let playlist = selectedPlaylist, playlist.isEditable {
                         Button {

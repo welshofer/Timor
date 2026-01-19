@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0CC7F2BEBB9500A80EC71293 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 268913B00BAE03CE74D3EB38 /* Foundation.framework */; };
 		130030FCA187F3104DFCB3DC /* SpotifyErrorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E271185B53F863B0F979B29A /* SpotifyErrorTests.swift */; };
 		3129DFBDCB8BA4570EAC5F4A /* TimorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8CBAF07F91F669B9BA4EB9 /* TimorTests.swift */; };
 		32D0AB3587919588C219C25B /* RateLimiterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1BE196357FE452008C2541 /* RateLimiterTests.swift */; };
@@ -27,8 +28,10 @@
 /* Begin PBXFileReference section */
 		098683F8D9567894320E6BE6 /* PlaylistUndoManagerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaylistUndoManagerTests.swift; sourceTree = "<group>"; };
 		1E8CBAF07F91F669B9BA4EB9 /* TimorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimorTests.swift; sourceTree = "<group>"; };
+		268913B00BAE03CE74D3EB38 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		4E04341DB5609A4F5CF1E821 /* TimorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TimorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6D1BE196357FE452008C2541 /* RateLimiterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RateLimiterTests.swift; sourceTree = "<group>"; };
+		A55857D1C00824FF024FAF9C /* Timor iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "Timor iOS.app"; path = Timor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFA6B0FC2E84AA0800FAD721 /* Timor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Timor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E17F24E6C5B385893D813AEA /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		E271185B53F863B0F979B29A /* SpotifyErrorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpotifyErrorTests.swift; sourceTree = "<group>"; };
@@ -37,8 +40,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AFA6B0FE2E84AA0800FAD721 /* Timor */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = Timor;
 			sourceTree = "<group>";
 		};
@@ -60,6 +61,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA57854A76A4C9BA58B05A36 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0CC7F2BEBB9500A80EC71293 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -71,7 +80,6 @@
 				1E8CBAF07F91F669B9BA4EB9 /* TimorTests.swift */,
 				E271185B53F863B0F979B29A /* SpotifyErrorTests.swift */,
 			);
-			name = TimorTests;
 			path = TimorTests;
 			sourceTree = SOURCE_ROOT;
 		};
@@ -81,6 +89,14 @@
 				E17F24E6C5B385893D813AEA /* Cocoa.framework */,
 			);
 			name = "OS X";
+			sourceTree = "<group>";
+		};
+		88F3DB8B7DFACF3C00DEE57A /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				268913B00BAE03CE74D3EB38 /* Foundation.framework */,
+			);
+			name = iOS;
 			sourceTree = "<group>";
 		};
 		AFA6B0F32E84AA0800FAD721 = {
@@ -98,6 +114,7 @@
 			children = (
 				AFA6B0FC2E84AA0800FAD721 /* Timor.app */,
 				4E04341DB5609A4F5CF1E821 /* TimorTests.xctest */,
+				A55857D1C00824FF024FAF9C /* Timor iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -106,6 +123,7 @@
 			isa = PBXGroup;
 			children = (
 				46BC12CC6AFE9DCE8B44B355 /* OS X */,
+				88F3DB8B7DFACF3C00DEE57A /* iOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -151,6 +169,26 @@
 			productReference = AFA6B0FC2E84AA0800FAD721 /* Timor.app */;
 			productType = "com.apple.product-type.application";
 		};
+		D7997EA98AB2A77775FD7FED /* Timor iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C6711F7CA16374B10C0A2C56 /* Build configuration list for PBXNativeTarget "Timor iOS" */;
+			buildPhases = (
+				09D4D3DB50C7954B5EA009D2 /* Sources */,
+				BA57854A76A4C9BA58B05A36 /* Frameworks */,
+				2E22DC802882EDA893722098 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AFA6B0FE2E84AA0800FAD721 /* Timor */,
+			);
+			name = "Timor iOS";
+			productName = "Timor iOS";
+			productReference = A55857D1C00824FF024FAF9C /* Timor iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -182,11 +220,19 @@
 			targets = (
 				AFA6B0FB2E84AA0800FAD721 /* Timor */,
 				66E30A13EF7547DD8ABAB4CF /* TimorTests */,
+				D7997EA98AB2A77775FD7FED /* Timor iOS */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		2E22DC802882EDA893722098 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		646DA342FBF0F7AAE4F13A58 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -204,6 +250,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		09D4D3DB50C7954B5EA009D2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AFA6B0F82E84AA0800FAD721 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -234,6 +287,37 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		2416EABC60019E7A69E5C19F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QGNJVQUKK7;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Timor;
+				INFOPLIST_KEY_CFBundleURLTypes = "{\"CFBundleURLSchemes\"=>[\"timor\"], \"CFBundleURLName\"=>\"xsf.welshofer.Timor\"}";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = xsf.welshofer.Timor;
+				PRODUCT_NAME = Timor;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		8FAB333518AF3D5346512152 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -480,6 +564,38 @@
 			};
 			name = Release;
 		};
+		B22A9A80400140D0483884F7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QGNJVQUKK7;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Timor;
+				INFOPLIST_KEY_CFBundleURLTypes = "{\"CFBundleURLSchemes\"=>[\"timor\"], \"CFBundleURLName\"=>\"xsf.welshofer.Timor\"}";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = xsf.welshofer.Timor;
+				PRODUCT_NAME = Timor;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		D4E21FCCC31DBB58B1A39772 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -522,6 +638,15 @@
 			buildConfigurations = (
 				8FAB333518AF3D5346512152 /* Release */,
 				D4E21FCCC31DBB58B1A39772 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C6711F7CA16374B10C0A2C56 /* Build configuration list for PBXNativeTarget "Timor iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B22A9A80400140D0483884F7 /* Release */,
+				2416EABC60019E7A69E5C19F /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -9,7 +9,7 @@ import Foundation
 import Security
 import os.log
 
-class KeychainManager {
+final class KeychainManager: @unchecked Sendable {
     static let shared = KeychainManager()
 
     private static let logger = Logger(subsystem: "com.timor.spotify", category: "KeychainManager")

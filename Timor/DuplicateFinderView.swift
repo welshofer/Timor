@@ -182,7 +182,9 @@ struct DuplicateFinderView: View {
                                 .foregroundStyle(.orange)
                         }
                     }
+                    #if os(macOS)
                     .toggleStyle(.checkbox)
+                    #endif
                     Spacer()
                 }
                 .padding(.vertical, 4)
@@ -216,12 +218,20 @@ struct DuplicateFinderView: View {
                 Button("Select All Duplicates") {
                     selectAllDuplicates()
                 }
+                #if os(macOS)
                 .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
 
                 Button("Deselect All") {
                     selectedForRemoval.removeAll()
                 }
+                #if os(macOS)
                 .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
             }
 
             Spacer()

@@ -2,12 +2,14 @@
 //  TrackTableView.swift
 //  Timor
 //
-//  Track table component for displaying playlist tracks
+//  Track table component for displaying playlist tracks (macOS only)
+//  iOS uses TrackListView with drag-to-reorder support
 //
 
 import SwiftUI
 import Combine
 
+#if os(macOS)
 struct TrackTableView: View {
     @ObservedObject var spotifyManager: SpotifyManager
     let playlist: SpotifyManager.Playlist?
@@ -143,7 +145,8 @@ struct TrackTableView: View {
                 playlist: playlist,
                 spotifyManager: spotifyManager,
                 showDeleteConfirmation: $showDeleteConfirmation,
-                searchText: debouncedSearchText
+                searchText: debouncedSearchText,
+                isSortingActive: isSortingActive
             )
         }
         // Optimized ID: only includes playlist ID and search text, not count
@@ -173,16 +176,19 @@ struct TrackTableView: View {
                 if !sortOrder.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.up.arrow.down.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("Sorted")
+                            .foregroundStyle(.orange)
+                        Text("Sorted View")
                             .font(.caption)
+                        Text("• Reorder disabled")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Button {
                             withAnimation { sortOrder = [] }
                         } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
+                            Text("Show Playlist Order")
+                                .font(.caption)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.link)
                     }
                 }
 
@@ -275,6 +281,7 @@ struct TrackContextMenu: View {
     let spotifyManager: SpotifyManager
     @Binding var showDeleteConfirmation: Bool
     let searchText: String
+    let isSortingActive: Bool
 
     /// Get the selected tracks
     var selectedTracks: [SpotifyManager.Track] {
@@ -294,12 +301,13 @@ struct TrackContextMenu: View {
     var body: some View {
         if items.isEmpty {
             Text("No selection")
-        } else if items.count == 1, searchText.isEmpty {
+        } else if items.count == 1, searchText.isEmpty, let trackId = items.first {
             SingleTrackContextMenu(
-                trackId: items.first!,
+                trackId: trackId,
                 playlist: playlist,
                 spotifyManager: spotifyManager,
-                showDeleteConfirmation: $showDeleteConfirmation
+                showDeleteConfirmation: $showDeleteConfirmation,
+                isSortingActive: isSortingActive
             )
         } else {
             // Multiple selection context menu
@@ -341,11 +349,18 @@ struct SingleTrackContextMenu: View {
     let playlist: SpotifyManager.Playlist?
     let spotifyManager: SpotifyManager
     @Binding var showDeleteConfirmation: Bool
-    
+    let isSortingActive: Bool
+
     var track: SpotifyManager.Track? {
         spotifyManager.currentPlaylistTracks.first(where: { $0.id == trackId })
     }
-    
+
+    /// Can reorder only when not sorting and playlist is editable
+    var canReorder: Bool {
+        guard let playlist = playlist else { return false }
+        return playlist.isEditable && !isSortingActive
+    }
+
     var body: some View {
         if let track = track {
             Button {
@@ -360,13 +375,16 @@ struct SingleTrackContextMenu: View {
                 Label(track.isLiked ? "Remove from Liked Songs" : "Add to Liked Songs",
                       systemImage: track.isLiked ? "heart.fill" : "heart")
             }
-            
+
             Divider()
-            
+
             if let playlist = playlist, playlist.isEditable {
+                // Move options - disabled when sorting is active
                 Button("Move to Top") {
                     moveTrack(to: 0)
                 }
+                .disabled(!canReorder)
+
                 Button("Move Up") {
                     if let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
                        index > 0 {
@@ -374,7 +392,8 @@ struct SingleTrackContextMenu: View {
                     }
                 }
                 .keyboardShortcut("↑", modifiers: [.command])
-                
+                .disabled(!canReorder)
+
                 Button("Move Down") {
                     if let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }),
                        index < spotifyManager.currentPlaylistTracks.count - 1 {
@@ -382,13 +401,21 @@ struct SingleTrackContextMenu: View {
                     }
                 }
                 .keyboardShortcut("↓", modifiers: [.command])
-                
+                .disabled(!canReorder)
+
                 Button("Move to Bottom") {
                     moveTrack(to: spotifyManager.currentPlaylistTracks.count)
                 }
-                
+                .disabled(!canReorder)
+
+                if isSortingActive {
+                    Text("Clear sorting to reorder")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Divider()
-                
+
                 Button("Delete", role: .destructive) {
                     showDeleteConfirmation = true
                 }
@@ -401,7 +428,7 @@ struct SingleTrackContextMenu: View {
               let index = spotifyManager.currentPlaylistTracks.firstIndex(where: { $0.id == trackId }) else {
             return
         }
-        
+
         Task {
             await spotifyManager.reorderTracks(
                 in: playlist.id,
@@ -411,3 +438,4 @@ struct SingleTrackContextMenu: View {
         }
     }
 }
+#endif
