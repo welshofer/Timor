@@ -189,7 +189,7 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) folde
 | [API Reference](docs/API-REFERENCE.md) | Complete API documentation for all public types |
 | [State Management](docs/STATE-MANAGEMENT.md) | Observable patterns, view bindings, state flow |
 | [Caching](docs/CACHING.md) | Cache strategy, invalidation, performance |
-| [Security](docs/SECURITY.md) | Credential storage, certificate pinning, threat model |
+| [Security](SECURITY.md) | Credential storage, certificate pinning, threat model |
 
 ## License
 
@@ -197,7 +197,7 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) folde
 
 ## Contributing
 
-Contributions welcome! Please open an issue first to discuss proposed changes.
+Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Troubleshooting
 

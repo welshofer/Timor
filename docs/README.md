@@ -12,7 +12,7 @@ Welcome to the Timor technical documentation. This documentation provides compre
 | [API Reference](API-REFERENCE.md) | Complete API documentation for all public types |
 | [State Management](STATE-MANAGEMENT.md) | Observable patterns, view bindings, state flow |
 | [Caching](CACHING.md) | Cache strategy, invalidation, performance |
-| [Security](SECURITY.md) | Credential storage, certificate pinning, threat model |
+| [Security](../SECURITY.md) | Credential storage, certificate pinning, threat model |
 
 ## Architecture at a Glance
 
@@ -79,7 +79,7 @@ For new contributors, we recommend:
 4. **[OAuth Flow](OAUTH-FLOW.md)** — Authentication deep dive
 5. **[API Reference](API-REFERENCE.md)** — Complete API coverage
 6. **[Caching](CACHING.md)** — Performance optimizations
-7. **[Security](SECURITY.md)** — Security measures
+7. **[Security](../SECURITY.md)** — Security measures
 
 ## Diagrams
 
@@ -121,5 +121,6 @@ When modifying code:
 ## Project Links
 
 - [Main README](../README.md) — User-facing documentation
-- [CLAUDE.md](../CLAUDE.md) — AI assistant context
+- [CONTRIBUTING](../CONTRIBUTING.md) — Contribution guidelines
+- [SECURITY](../SECURITY.md) — Security policy
 - [LICENSE](../LICENSE) — MIT License
