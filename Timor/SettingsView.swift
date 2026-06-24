@@ -15,6 +15,8 @@ struct SettingsView: View {
     @State private var clientID: String = ""
     @State private var clientSecret: String = ""
     @State private var showingSaveConfirmation = false
+    @State private var showingSaveError = false
+    @State private var saveErrorMessage = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -30,9 +32,14 @@ struct SettingsView: View {
             }
 
             Section("Client ID") {
-                SecureField("Enter your Spotify Client ID", text: $clientID)
+                // USE-4: the Client ID is public (not a secret), so use a plain TextField
+                // — masking it only prevents users from verifying a correct paste.
+                TextField("Enter your Spotify Client ID", text: $clientID)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
+                Text("Your Client ID is not secret — it's safe to display.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Client Secret") {
@@ -116,6 +123,13 @@ struct SettingsView: View {
         } message: {
             Text("Your Spotify credentials have been securely saved to the Keychain.")
         }
+        .alert("Couldn't Save Credentials", isPresented: $showingSaveError) {
+            Button("OK") { }
+        } message: {
+            Text(saveErrorMessage.isEmpty
+                 ? "The credentials could not be saved to the Keychain. Please try again."
+                 : saveErrorMessage)
+        }
     }
 
     private func loadCredentials() {
@@ -125,14 +139,14 @@ struct SettingsView: View {
 
     private func saveCredentials() {
         logger.info("Saving credentials - ClientID length: \(clientID.count), Secret length: \(clientSecret.count)")
-        spotifyManager.clientID = clientID
-        spotifyManager.clientSecret = clientSecret
-
-        // Verify save worked
-        let savedID = spotifyManager.clientID
-        let savedSecret = spotifyManager.clientSecret
-        logger.info("Verification - Saved ClientID length: \(savedID.count), Saved Secret length: \(savedSecret.count)")
-
-        showingSaveConfirmation = true
+        // STAB-3: only confirm success if the Keychain write actually succeeded.
+        do {
+            try spotifyManager.saveCredentials(clientID: clientID, clientSecret: clientSecret)
+            showingSaveConfirmation = true
+        } catch {
+            logger.error("Failed to save credentials: \(error.localizedDescription, privacy: .public)")
+            saveErrorMessage = error.localizedDescription
+            showingSaveError = true
+        }
     }
 }

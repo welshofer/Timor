@@ -493,15 +493,12 @@ struct PlaylistRow: View {
 
 struct EmptyPlaylistsView: View {
     var body: some View {
-        VStack {
-            Spacer()
-            Text("Connect to Spotify to see your playlists")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding()
-            Spacer()
-        }
+        // ATTR-1: native empty state.
+        ContentUnavailableView(
+            "Not Connected",
+            systemImage: "music.note.list",
+            description: Text("Connect to Spotify to see your playlists.")
+        )
     }
 }
 

@@ -194,9 +194,12 @@ struct LoadingTracksView: View {
 
 struct EmptyPlaylistView: View {
     var body: some View {
-        Text("No tracks in this playlist")
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // ATTR-1: native empty state.
+        ContentUnavailableView(
+            "No Tracks",
+            systemImage: "music.note",
+            description: Text("This playlist doesn't have any tracks yet.")
+        )
     }
 }
 

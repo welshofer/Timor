@@ -92,6 +92,8 @@ class SpotifyManager: ObservableObject {
     @Published var lastError: String?
     @Published var lastErrorRecovery: String?
     @Published var showError = false
+    /// USE-5: transient, non-error status message (e.g. the result of a bulk like/unlike).
+    @Published var infoMessage: String?
     @Published var lastCacheUpdate: Date?
     @Published var isUsingCache = false
     @Published var modelContainerFailed = false
@@ -158,6 +160,18 @@ class SpotifyManager: ObservableObject {
         let uri: String
         let albumArtURL: String?
         var isLiked: Bool = false
+
+        /// FUNC-2: parsed duration in seconds, for correct *numeric* sorting. The `duration`
+        /// string is "M:SS", which sorts incorrectly as text ("10:05" before "9:30").
+        var durationSeconds: Int {
+            let parts = duration.split(separator: ":")
+            guard parts.count == 2,
+                  let minutes = Int(parts[0]),
+                  let seconds = Int(parts[1]) else {
+                return 0
+            }
+            return minutes * 60 + seconds
+        }
 
         static var transferRepresentation: some TransferRepresentation {
             CodableRepresentation(contentType: .spotifyTrack)
@@ -254,10 +268,17 @@ class SpotifyManager: ObservableObject {
             ])
             let url = URL.applicationSupportDirectory.appending(path: Constants.Cache.cacheStoreFileName)
 
-            // Delete corrupted store if it exists
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
-            try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
+            // STAB-4: don't destroy the user's cache on a single transient failure.
+            // Move the (possibly recoverable) store aside instead of deleting it, so the
+            // data can be recovered/inspected later rather than being silently lost.
+            let backupURL = url.appendingPathExtension("corrupt")
+            let fileManager = FileManager.default
+            for suffix in ["", "shm", "wal"] {
+                let source = suffix.isEmpty ? url : url.appendingPathExtension(suffix)
+                let destination = suffix.isEmpty ? backupURL : backupURL.appendingPathExtension(suffix)
+                try? fileManager.removeItem(at: destination)  // clear any prior backup
+                try? fileManager.moveItem(at: source, to: destination)
+            }
 
             let modelConfiguration = ModelConfiguration(
                 schema: schema,
@@ -334,6 +355,16 @@ class SpotifyManager: ObservableObject {
     /// Updates the hasCredentials published property for UI reactivity
     private func updateHasCredentials() {
         hasCredentials = !clientID.isEmpty && !clientSecret.isEmpty
+    }
+
+    /// STAB-3: Saves credentials to the Keychain, surfacing any failure to the caller.
+    /// Unlike the `clientID`/`clientSecret` setters (which swallow errors), this throws so
+    /// the UI can avoid reporting a false "saved" success when the Keychain write fails.
+    func saveCredentials(clientID newClientID: String, clientSecret newClientSecret: String) throws {
+        try keychain.save(newClientID, for: Constants.Keychain.clientIdKey)
+        try keychain.save(newClientSecret, for: Constants.Keychain.clientSecretKey)
+        updateHasCredentials()
+        Self.logger.info("Saved Spotify credentials to keychain")
     }
 
     var redirectURI: String {
@@ -518,6 +549,9 @@ class SpotifyManager: ObservableObject {
         }
 
         Self.logger.info("Bulk like completed: \(succeeded) succeeded, \(failed) failed")
+        infoMessage = failed == 0
+            ? "Liked \(succeeded) track\(succeeded == 1 ? "" : "s")"
+            : "Liked \(succeeded) of \(succeeded + failed) — \(failed) failed"
         return (succeeded, failed)
     }
 
@@ -562,6 +596,9 @@ class SpotifyManager: ObservableObject {
         }
 
         Self.logger.info("Bulk unlike completed: \(succeeded) succeeded, \(failed) failed")
+        infoMessage = failed == 0
+            ? "Removed \(succeeded) track\(succeeded == 1 ? "" : "s") from Liked Songs"
+            : "Removed \(succeeded) of \(succeeded + failed) — \(failed) failed"
         return (succeeded, failed)
     }
 
@@ -719,6 +756,10 @@ class SpotifyManager: ObservableObject {
         var offset = 0
         let limit = Constants.Spotify.likedSongsBatchSize
         var hasMore = true
+        // REL-3: track whether pagination finished cleanly. A mid-pagination API failure
+        // returns an empty batch (total 0), which must NOT be cached as the full library.
+        var knownTotal: Int?
+        var completedCleanly = true
 
         while hasMore {
             // Check if this request was cancelled
@@ -729,6 +770,20 @@ class SpotifyManager: ObservableObject {
             Self.logger.debug("Fetching liked songs batch at offset \(offset)...")
             let result = await SpotifyWebAPI.shared.fetchLikedSongs(limit: limit, offset: offset)
             Self.logger.debug("Got \(result.tracks.count) tracks in this batch")
+
+            if knownTotal == nil && result.total > 0 {
+                knownTotal = result.total
+            }
+
+            // An empty batch before reaching the known total means a failed/short fetch.
+            if result.tracks.isEmpty {
+                if let total = knownTotal, allTracks.count < total {
+                    completedCleanly = false
+                    Self.logger.warning("Liked songs fetch incomplete at \(allTracks.count)/\(total) — not caching")
+                }
+                break
+            }
+
             allTracks.append(contentsOf: result.tracks)
 
             // Update progress only if still valid
@@ -736,7 +791,7 @@ class SpotifyManager: ObservableObject {
                 self.loadingProgress = (allTracks.count, result.total)
             }
 
-            hasMore = allTracks.count < result.total && !result.tracks.isEmpty
+            hasMore = allTracks.count < result.total
             offset += limit
         }
 
@@ -748,9 +803,12 @@ class SpotifyManager: ObservableObject {
             return
         }
 
-        // Only cache if we got tracks (prevent overwriting with empty data)
-        if !allTracks.isEmpty {
+        // Only cache a COMPLETE, non-empty result (REL-3: never overwrite the cache with a
+        // partial library caused by a mid-pagination failure). The partial set is still shown.
+        if !allTracks.isEmpty && completedCleanly {
             cacheLikedSongs(allTracks)
+        } else if !completedCleanly {
+            Self.logger.warning("Liked songs fetch incomplete - keeping existing cache")
         } else {
             Self.logger.warning("Received 0 liked songs from API - not updating cache")
         }
@@ -1140,10 +1198,12 @@ class SpotifyManager: ObservableObject {
         }
 
         // Compare with current tracks (but DON'T push changes to Spotify!)
+        // REL-2: compare the FULL ordered list of track IDs, not just count+first+last —
+        // otherwise a track swapped in the middle (same count, same endpoints) is missed and
+        // the stale cache persists. (A full-list compare achieves the same goal as a
+        // snapshot_id check without the extra API round-trip.)
         let currentTracks = await MainActor.run { self.currentPlaylistTracks }
-        if freshTracks.count != currentTracks.count ||
-           freshTracks.first?.trackId != currentTracks.first?.trackId ||
-           freshTracks.last?.trackId != currentTracks.last?.trackId {
+        if freshTracks.map(\.trackId) != currentTracks.map(\.trackId) {
 
             // Playlist has changed on Spotify, update our LOCAL view only
             Self.logger.info("Playlist \(playlistId, privacy: .public) has changes on Spotify, updating local view")
@@ -1429,21 +1489,31 @@ class SpotifyManager: ObservableObject {
             self.currentPlaylistTracks = tracks
         }
 
-        // Calculate the API parameters
-        // source contains the original indices, destination is where they should go
-        guard let firstIndex = source.first else { return }
+        // Calculate the API parameters.
+        // source contains the original indices, destination is where they should go.
+        guard let firstIndex = source.first, let lastIndex = source.max() else { return }
         let rangeLength = source.count
 
-        // Adjust destination index based on move direction
-        let insertBefore = destination > firstIndex ? destination - rangeLength : destination
-
-        // Call Spotify API to persist the change
-        let success = await SpotifyWebAPI.shared.reorderPlaylistTracks(
-            playlistId: playlistId,
-            rangeStart: firstIndex,
-            insertBefore: insertBefore,
-            rangeLength: rangeLength
-        )
+        // STAB-5: Spotify's reorder endpoint only models a CONTIGUOUS block (range_start +
+        // range_length). For a contiguous selection use it; for a non-contiguous selection,
+        // persist the exact locally-moved order via replace so the playlist can't be corrupted.
+        let isContiguous = (lastIndex - firstIndex + 1) == rangeLength
+        let success: Bool
+        if isContiguous {
+            let insertBefore = destination > firstIndex ? destination - rangeLength : destination
+            success = await SpotifyWebAPI.shared.reorderPlaylistTracks(
+                playlistId: playlistId,
+                rangeStart: firstIndex,
+                insertBefore: insertBefore,
+                rangeLength: rangeLength
+            )
+        } else {
+            Self.logger.info("Non-contiguous reorder — persisting full order via replace")
+            success = await SpotifyWebAPI.shared.replacePlaylistTracks(
+                playlistId: playlistId,
+                trackUris: tracks.map { $0.uri }
+            )
+        }
 
         if success {
             // Update cache with the modified playlist

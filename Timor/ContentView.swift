@@ -144,7 +144,7 @@ struct ContentView: View {
                 showDeleteError: $showDeleteError
             )
         } message: {
-            Text("This will permanently remove the selected track\(selectedTracks.count == 1 ? "" : "s") from your Spotify playlist. This action cannot be undone.")
+            Text("This will remove the selected track\(selectedTracks.count == 1 ? "" : "s") from your Spotify playlist. You can undo it with ⌘Z.")
         }
         .alert("Delete Failed", isPresented: $showDeleteError) {
             Button("OK") { }
@@ -167,15 +167,24 @@ struct ContentView: View {
                 }
             }
         }
+        // USE-5: transient feedback for bulk like/unlike (and similar) results.
+        .alert(spotifyManager.infoMessage ?? "", isPresented: Binding(
+            get: { spotifyManager.infoMessage != nil },
+            set: { if !$0 { spotifyManager.infoMessage = nil } }
+        )) {
+            Button("OK") { spotifyManager.infoMessage = nil }
+        }
     }
 }
 
 struct EmptyDetailView: View {
     var body: some View {
-        Text("Select a playlist to view tracks")
-            .font(.title2)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // ATTR-1: native empty state instead of bare centered text.
+        ContentUnavailableView(
+            "No Playlist Selected",
+            systemImage: "music.note.list",
+            description: Text("Select a playlist from the sidebar to view its tracks.")
+        )
     }
 }
 

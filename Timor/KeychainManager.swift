@@ -121,15 +121,21 @@ final class KeychainManager: @unchecked Sendable {
         // Determine protection level based on key type
         let protection: ProtectionLevel
         switch key {
-        case Constants.Keychain.clientSecretKey, Constants.Keychain.refreshTokenKey:
-            protection = .high  // Sensitive credentials get high protection
+        case Constants.Keychain.clientSecretKey,
+             Constants.Keychain.refreshTokenKey,
+             Constants.Keychain.accessTokenKey:
+            // SEC-3: bearer tokens and secrets are device-only (not backup/sync-eligible).
+            protection = .high
         default:
             protection = .standard
         }
         try save(value, for: key, protection: protection)
     }
 
-    func retrieve(for key: String) throws -> String {
+    /// SEC-4: Retrieve the raw Data for a key without materializing a String copy. Used for
+    /// secrets so the sensitive bytes can be operated on in a zeroable buffer rather than an
+    /// immutable Swift String that lingers in memory until deallocation.
+    func retrieveData(for key: String) throws -> Data {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -149,11 +155,18 @@ final class KeychainManager: @unchecked Sendable {
             throw KeychainError.unhandledError(status: status)
         }
 
-        guard let data = dataTypeRef as? Data,
-              let value = String(data: data, encoding: .utf8) else {
+        guard let data = dataTypeRef as? Data else {
             throw KeychainError.invalidData
         }
 
+        return data
+    }
+
+    func retrieve(for key: String) throws -> String {
+        let data = try retrieveData(for: key)
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw KeychainError.invalidData
+        }
         return value
     }
 
