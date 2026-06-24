@@ -121,3 +121,38 @@ final class SpotifyErrorTests: XCTestCase {
         }
     }
 }
+
+// MARK: - FUNC-3: Search query building
+
+@MainActor
+final class SpotifySearchQueryTests: XCTestCase {
+
+    func testSingleWordTermsAreUnquotedForPartialMatch() {
+        let query = SpotifyWebAPI.buildSearchQuery(title: "Yesterday", artist: "Beatles", album: "", year: "")
+        XCTAssertEqual(query, "track:Yesterday artist:Beatles")
+    }
+
+    func testMultiWordTermsAreQuotedToPreservePhrase() {
+        let query = SpotifyWebAPI.buildSearchQuery(title: "Hey Jude", artist: "The Beatles", album: "", year: "")
+        XCTAssertEqual(query, "track:\"Hey Jude\" artist:\"The Beatles\"")
+    }
+
+    func testYearIsAppendedUnquoted() {
+        let query = SpotifyWebAPI.buildSearchQuery(title: "", artist: "", album: "", year: "1969")
+        XCTAssertEqual(query, "year:1969")
+    }
+
+    func testEmptyInputsProduceEmptyQuery() {
+        XCTAssertEqual(SpotifyWebAPI.buildSearchQuery(title: "", artist: "", album: "", year: ""), "")
+    }
+
+    func testWhitespaceOnlyTermsAreIgnored() {
+        let query = SpotifyWebAPI.buildSearchQuery(title: "   ", artist: "Adele", album: "", year: "")
+        XCTAssertEqual(query, "artist:Adele")
+    }
+
+    func testAllFieldsCombineInOrder() {
+        let query = SpotifyWebAPI.buildSearchQuery(title: "Hello", artist: "Adele", album: "25", year: "2015")
+        XCTAssertEqual(query, "track:Hello artist:Adele album:25 year:2015")
+    }
+}
