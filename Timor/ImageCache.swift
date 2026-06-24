@@ -40,14 +40,17 @@ final class ImageCache: @unchecked Sendable {
     private let inFlightLock = NSLock()
     private var inFlightRequests: [String: Task<PlatformImage?, Never>] = [:]
 
-    /// Maximum number of images in memory cache
-    private let maxMemoryCount = 100
+    /// Maximum number of images in memory cache.
+    /// The cache holds tiny (~36KB) downsampled row thumbnails alongside the occasional
+    /// full-size inspector image. A low object count evicts thumbnails on large playlists,
+    /// forcing a re-decode on re-scroll — so allow plenty of room (cost is still bounded below).
+    private let maxMemoryCount = 3000
 
-    /// Maximum total memory cost (50MB)
-    private let maxMemoryCost = 50 * 1024 * 1024
+    /// Maximum total memory cost (128MB) — ~3500 96px thumbnails, or a mix with full-size art.
+    private let maxMemoryCost = 128 * 1024 * 1024
 
-    /// Maximum disk cache size (200MB)
-    private let maxDiskCacheSize = 200 * 1024 * 1024
+    /// Maximum disk cache size (400MB) — full-size source art is reused to decode thumbnails.
+    private let maxDiskCacheSize = 400 * 1024 * 1024
 
     /// Disk cache expiry (7 days)
     private let diskCacheExpiry: TimeInterval = 7 * 24 * 60 * 60
