@@ -155,12 +155,21 @@ struct TrackTableRepresentable: NSViewRepresentable {
             self.parent = parent
         }
 
-        /// Reload only when the displayed identities or liked-state actually change.
+        /// PERF-2: reload only the rows that changed (e.g. one like) rather than the whole table.
         func apply(tracks newTracks: [SpotifyManager.Track]) {
-            let changed = tracks.map(\.id) != newTracks.map(\.id)
-                || tracks.map(\.isLiked) != newTracks.map(\.isLiked)
+            guard let tableView = tableView else { tracks = newTracks; return }
+            if tracks.map(\.id) != newTracks.map(\.id) {
+                tracks = newTracks
+                tableView.reloadData()   // structure changed (add/remove/reorder/switch)
+                return
+            }
+            var changed = IndexSet()
+            for (index, pair) in zip(tracks, newTracks).enumerated() where pair.0 != pair.1 {
+                changed.insert(index)
+            }
             tracks = newTracks
-            if changed { tableView?.reloadData() }
+            guard !changed.isEmpty else { return }
+            tableView.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(0..<tableView.numberOfColumns))
         }
 
         func applySelection(_ ids: Set<SpotifyManager.Track.ID>) {
@@ -375,17 +384,6 @@ struct TrackTableRepresentable: NSViewRepresentable {
                 )
             }
         }
-    }
-}
-
-private enum MoveDest { case top, upward, downward, bottom }
-
-private final class MoveCommand: NSObject {
-    let track: SpotifyManager.Track
-    let dest: MoveDest
-    init(track: SpotifyManager.Track, dest: MoveDest) {
-        self.track = track
-        self.dest = dest
     }
 }
 #endif

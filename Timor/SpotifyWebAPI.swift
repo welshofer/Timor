@@ -604,7 +604,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         // Combine credentials
         var credentials = clientIdData
-        credentials.append(":".data(using: .utf8)!)
+        credentials.append(Data(":".utf8))  // STAB-2: non-failing UTF-8 encode
         credentials.append(secretData)
 
         let base64 = credentials.base64EncodedString()
@@ -727,7 +727,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         let state = UUID().uuidString
         pendingAuthState = state  // SEC-1: remember it to validate the callback
 
-        var components = URLComponents(string: authURL)!
+        guard var components = URLComponents(string: authURL) else {  // STAB-2: no force unwrap
+            Self.logger.error("Invalid authorization URL")
+            return
+        }
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "response_type", value: "code"),

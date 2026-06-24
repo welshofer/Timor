@@ -141,6 +141,9 @@ struct TrackFilterView: View {
     @State private var durationSliderRange: ClosedRange<Double> = 0...600
     @State private var isYearFilterEnabled = false
     @State private var isDurationFilterEnabled = false
+    // PERF-4: cache the artist histogram (full grouping over all tracks) instead of
+    // recomputing it on every popover render / slider drag.
+    @State private var cachedArtists: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -263,14 +266,14 @@ struct TrackFilterView: View {
             Divider()
 
             // Artist Filter (top 10)
-            if !allArtists.isEmpty {
+            if !cachedArtists.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Artists", systemImage: "person.2")
                         .font(.subheadline)
 
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(allArtists.prefix(15), id: \.self) { artist in
+                            ForEach(cachedArtists.prefix(15), id: \.self) { artist in
                                 Toggle(isOn: Binding(
                                     get: { filter.selectedArtists.contains(artist) },
                                     set: { isSelected in
@@ -298,6 +301,7 @@ struct TrackFilterView: View {
         .padding()
         .frame(width: 280)
         .onAppear {
+            cachedArtists = allArtists  // PERF-4: compute the histogram once
             // Initialize slider positions from current filter
             if let minYear = filter.minYear, let maxYear = filter.maxYear {
                 yearSliderRange = Double(minYear)...Double(maxYear)
@@ -393,13 +397,19 @@ struct RangeSlider: View {
         .frame(height: 24)
     }
 
+    /// STAB-1: guard against a zero-width range (e.g. all tracks share one year) which would
+    /// divide by zero and produce NaN offsets / a broken slider.
+    private var span: Double {
+        max(bounds.upperBound - bounds.lowerBound, 0.0001)
+    }
+
     private func leftOffset(width: CGFloat) -> CGFloat {
-        let ratio = (range.lowerBound - bounds.lowerBound) / (bounds.upperBound - bounds.lowerBound)
+        let ratio = (range.lowerBound - bounds.lowerBound) / span
         return CGFloat(ratio) * width
     }
 
     private func rightOffset(width: CGFloat) -> CGFloat {
-        let ratio = (range.upperBound - bounds.lowerBound) / (bounds.upperBound - bounds.lowerBound)
+        let ratio = (range.upperBound - bounds.lowerBound) / span
         return CGFloat(ratio) * width
     }
 
@@ -408,8 +418,9 @@ struct RangeSlider: View {
     }
 
     private func valueForPosition(_ position: CGFloat, width: CGFloat) -> Double {
-        let ratio = max(0, min(1, position / width))
-        let rawValue = bounds.lowerBound + ratio * (bounds.upperBound - bounds.lowerBound)
+        let safeWidth = max(width, 1)
+        let ratio = max(0, min(1, position / safeWidth))
+        let rawValue = bounds.lowerBound + ratio * span
         let steppedValue = (rawValue / step).rounded() * step
         return max(bounds.lowerBound, min(bounds.upperBound, steppedValue))
     }
