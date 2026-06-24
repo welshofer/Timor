@@ -173,6 +173,13 @@ class SpotifyManager: ObservableObject {
             return minutes * 60 + seconds
         }
 
+        /// FUNC-1: human-readable release date. `releaseDate` itself stores the RAW Spotify
+        /// value ("2023-10-15") so year/decade extraction and chronological sort work; this
+        /// formats it for display ("Oct 15, 2023").
+        var displayReleaseDate: String {
+            SpotifyDateFormatters.formatRelease(releaseDate)
+        }
+
         static var transferRepresentation: some TransferRepresentation {
             CodableRepresentation(contentType: .spotifyTrack)
         }

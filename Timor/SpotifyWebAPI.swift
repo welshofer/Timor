@@ -26,7 +26,7 @@ private let spotifyAPILogger = Logger(subsystem: "com.timor", category: "spotify
 /// formatting once configured (and never mutated), so reusing these avoids allocating a
 /// fresh, expensive formatter per track (PERF-1). HTTP-date parsing uses a fixed POSIX
 /// locale + GMT so it works regardless of device locale (REL-4).
-private enum SpotifyDateFormatters {
+enum SpotifyDateFormatters {
     nonisolated static let isoFullDate: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -56,6 +56,20 @@ private enum SpotifyDateFormatters {
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         return formatter
     }()
+
+    /// FUNC-1: Formats a RAW Spotify release date ("2023-10-15" / "2023-10" / "2023") for
+    /// display ("Oct 15, 2023" / "Oct 2023" / "2023"). The raw value is what gets stored on
+    /// Track so year extraction, decade buckets, and chronological sort work correctly.
+    nonisolated static func formatRelease(_ raw: String) -> String {
+        let components = raw.split(separator: "-")
+        if components.count == 3, let date = isoFullDate.date(from: raw) {
+            return displayFullDate.string(from: date)
+        }
+        if components.count == 2, let date = isoYearMonth.date(from: raw) {
+            return displayYearMonth.string(from: date)
+        }
+        return raw  // year-only, empty, or unparseable: show as-is
+    }
 }
 
 // MARK: - Spotify Errors
@@ -1035,7 +1049,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         name: track.name,
                         artist: track.artists.map { $0.name }.joined(separator: ", "),
                         album: track.album.name,
-                        releaseDate: formatReleaseDate(track.album.release_date),
+                        releaseDate: track.album.release_date ?? "",  // FUNC-1: store raw ISO
                         duration: formatDuration(track.duration_ms),
                         uri: track.uri,
                         albumArtURL: albumArtURL
@@ -1069,34 +1083,6 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         let minutes = seconds / 60
         let remainingSeconds = seconds % 60
         return String(format: "%d:%02d", minutes, remainingSeconds)
-    }
-
-    private func formatReleaseDate(_ dateString: String?) -> String {
-        guard let dateString = dateString else { return "" }
-
-        // Spotify returns dates in different formats:
-        // - Full date: "2023-10-15"
-        // - Year and month: "2023-10"
-        // - Year only: "2023"
-
-        let components = dateString.split(separator: "-")
-
-        if components.count == 3 {
-            // Full date - format as MMM d, yyyy (PERF-1: reuse shared formatters)
-            if let date = SpotifyDateFormatters.isoFullDate.date(from: dateString) {
-                return SpotifyDateFormatters.displayFullDate.string(from: date)
-            }
-        } else if components.count == 2 {
-            // Year and month - format as MMM yyyy
-            if let date = SpotifyDateFormatters.isoYearMonth.date(from: dateString) {
-                return SpotifyDateFormatters.displayYearMonth.string(from: date)
-            }
-        } else if components.count == 1 {
-            // Year only
-            return dateString
-        }
-
-        return dateString
     }
 
     /// FUNC-3: builds a Spotify search query string. Single-word field values are left
@@ -1288,7 +1274,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                                 name: name,
                                 artist: artistName,
                                 album: albumName,
-                                releaseDate: formatReleaseDate(releaseDate),
+                                releaseDate: releaseDate,  // FUNC-1: store raw ISO
                                 duration: formatDuration(duration_ms),
                                 uri: uri,
                                 albumArtURL: albumArtURL,

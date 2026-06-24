@@ -71,7 +71,7 @@ private enum TrackColumn: String, CaseIterable {
         case .title: return track.name
         case .artist: return track.artist
         case .album: return track.album
-        case .releaseDate: return track.releaseDate
+        case .releaseDate: return track.displayReleaseDate
         case .duration: return track.duration
         case .artwork, .liked: return ""
         }

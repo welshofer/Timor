@@ -33,7 +33,7 @@ struct TrackInspectorView: View {
                         DetailRow(label: "Artist", value: track.artist)
                         DetailRow(label: "Album", value: track.album)
                         DetailRow(label: "Duration", value: track.duration)
-                        DetailRow(label: "Release Date", value: track.releaseDate)
+                        DetailRow(label: "Release Date", value: track.displayReleaseDate)
 
                         if track.isLiked {
                             HStack {
