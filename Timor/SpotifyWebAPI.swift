@@ -27,29 +27,29 @@ private let spotifyAPILogger = Logger(subsystem: "com.timor", category: "spotify
 /// fresh, expensive formatter per track (PERF-1). HTTP-date parsing uses a fixed POSIX
 /// locale + GMT so it works regardless of device locale (REL-4).
 private enum SpotifyDateFormatters {
-    nonisolated(unsafe) static let isoFullDate: DateFormatter = {
+    nonisolated static let isoFullDate: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
-    nonisolated(unsafe) static let isoYearMonth: DateFormatter = {
+    nonisolated static let isoYearMonth: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM"
         return formatter
     }()
-    nonisolated(unsafe) static let displayFullDate: DateFormatter = {
+    nonisolated static let displayFullDate: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d, yyyy"
         return formatter
     }()
-    nonisolated(unsafe) static let displayYearMonth: DateFormatter = {
+    nonisolated static let displayYearMonth: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM yyyy"
         return formatter
     }()
-    nonisolated(unsafe) static let httpDate: DateFormatter = {
+    nonisolated static let httpDate: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "GMT")

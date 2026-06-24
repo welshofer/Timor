@@ -20,14 +20,19 @@ public typealias PlatformImage = UIImage
 final class ImageCache: @unchecked Sendable {
     static let shared = ImageCache()
 
-    private static let logger = Logger(subsystem: "com.timor.spotify", category: "ImageCache")
+    nonisolated private static let logger = Logger(subsystem: "com.timor.spotify", category: "ImageCache")
 
     // MARK: - Cache Configuration
 
-    private let memoryCache: NSCache<NSString, PlatformImage>
-    private let cacheDirectory: URL?
-    private let fileManager = FileManager.default
-    private let ioQueue = DispatchQueue(label: "com.timor.imagecache.io", qos: .utility)
+    // This is a thread-safe cache (NSCache, a serial ioQueue, pure hashing). The module
+    // defaults to MainActor isolation, so its thread-safe internals are marked `nonisolated`
+    // to allow off-main access — required for decoding thumbnails on a background thread.
+    // `internal` (not `private`) so the thumbnail extension (ImageCacheThumbnails.swift) can
+    // reuse these thread-safe internals.
+    nonisolated(unsafe) let memoryCache: NSCache<NSString, PlatformImage>
+    nonisolated let cacheDirectory: URL?
+    nonisolated(unsafe) let fileManager = FileManager.default
+    nonisolated let ioQueue = DispatchQueue(label: "com.timor.imagecache.io", qos: .utility)
 
     /// PERF-2: coalesce concurrent network fetches for the same URL so the inspector and a
     /// scrolling table don't each download the same album art. Lock-guarded (held only for
@@ -178,7 +183,7 @@ final class ImageCache: @unchecked Sendable {
 
     // MARK: - Private Implementation
 
-    private func cacheKey(for url: String) -> String {
+    nonisolated func cacheKey(for url: String) -> String {
         // Use SHA256 hash of URL as key for safe filenames
         let data = Data(url.utf8)
         var hash = [UInt8](repeating: 0, count: 32)
@@ -211,7 +216,7 @@ final class ImageCache: @unchecked Sendable {
         }
     }
 
-    private func diskPath(for key: String) -> URL? {
+    nonisolated func diskPath(for key: String) -> URL? {
         cacheDirectory?.appendingPathComponent(key).appendingPathExtension("png")
     }
 
@@ -238,7 +243,7 @@ final class ImageCache: @unchecked Sendable {
         #endif
     }
 
-    private func saveToDisk(image: PlatformImage, key: String) {
+    nonisolated func saveToDisk(image: PlatformImage, key: String) {
         guard let path = diskPath(for: key) else { return }
 
         #if os(macOS)
