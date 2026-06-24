@@ -254,10 +254,17 @@ class SpotifyManager: ObservableObject {
             ])
             let url = URL.applicationSupportDirectory.appending(path: Constants.Cache.cacheStoreFileName)
 
-            // Delete corrupted store if it exists
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
-            try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
+            // STAB-4: don't destroy the user's cache on a single transient failure.
+            // Move the (possibly recoverable) store aside instead of deleting it, so the
+            // data can be recovered/inspected later rather than being silently lost.
+            let backupURL = url.appendingPathExtension("corrupt")
+            let fileManager = FileManager.default
+            for suffix in ["", "shm", "wal"] {
+                let source = suffix.isEmpty ? url : url.appendingPathExtension(suffix)
+                let destination = suffix.isEmpty ? backupURL : backupURL.appendingPathExtension(suffix)
+                try? fileManager.removeItem(at: destination)  // clear any prior backup
+                try? fileManager.moveItem(at: source, to: destination)
+            }
 
             let modelConfiguration = ModelConfiguration(
                 schema: schema,
@@ -334,6 +341,16 @@ class SpotifyManager: ObservableObject {
     /// Updates the hasCredentials published property for UI reactivity
     private func updateHasCredentials() {
         hasCredentials = !clientID.isEmpty && !clientSecret.isEmpty
+    }
+
+    /// STAB-3: Saves credentials to the Keychain, surfacing any failure to the caller.
+    /// Unlike the `clientID`/`clientSecret` setters (which swallow errors), this throws so
+    /// the UI can avoid reporting a false "saved" success when the Keychain write fails.
+    func saveCredentials(clientID newClientID: String, clientSecret newClientSecret: String) throws {
+        try keychain.save(newClientID, for: Constants.Keychain.clientIdKey)
+        try keychain.save(newClientSecret, for: Constants.Keychain.clientSecretKey)
+        updateHasCredentials()
+        Self.logger.info("Saved Spotify credentials to keychain")
     }
 
     var redirectURI: String {

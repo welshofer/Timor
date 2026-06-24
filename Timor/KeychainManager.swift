@@ -121,8 +121,11 @@ final class KeychainManager: @unchecked Sendable {
         // Determine protection level based on key type
         let protection: ProtectionLevel
         switch key {
-        case Constants.Keychain.clientSecretKey, Constants.Keychain.refreshTokenKey:
-            protection = .high  // Sensitive credentials get high protection
+        case Constants.Keychain.clientSecretKey,
+             Constants.Keychain.refreshTokenKey,
+             Constants.Keychain.accessTokenKey:
+            // SEC-3: bearer tokens and secrets are device-only (not backup/sync-eligible).
+            protection = .high
         default:
             protection = .standard
         }
