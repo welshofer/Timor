@@ -136,7 +136,7 @@ struct TrackTableView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
-            .background(.ultraThinMaterial)
+            .glassEffect(in: .rect)  // Liquid Glass: filter/sort bar
         }
         .onChange(of: searchText) { _, newValue in
             // Debounce search input - wait 300ms before filtering

@@ -89,7 +89,7 @@ struct SettingsView: View {
                     Button("Cancel") {
                         dismiss()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
 
                     Spacer()
 
@@ -102,7 +102,7 @@ struct SettingsView: View {
                     Button("Save & Connect") {
                         saveAndConnect()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(clientID.isEmpty || clientSecret.isEmpty)
                 }
             }

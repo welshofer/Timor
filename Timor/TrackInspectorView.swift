@@ -114,7 +114,7 @@ struct TrackInspectorView: View {
         }
         .padding()
         .frame(width: 280)
-        .background(.regularMaterial)
+        .glassEffect(in: .rect)  // Liquid Glass: inspector panel
         .onChange(of: track?.albumArtURL) { oldValue, newValue in
             if let urlString = newValue {
                 loadAlbumArt(from: urlString)
@@ -211,10 +211,11 @@ struct AlbumArtModalView: View {
 
     var body: some View {
         ZStack {
-            // Background with padding for the image
+            // Liquid Glass: full-size art viewer card
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.regularMaterial)
+                .fill(.clear)
                 .frame(width: 680, height: 720)
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
 
             VStack(spacing: 16) {
                 if let albumArtImage = albumArtImage {

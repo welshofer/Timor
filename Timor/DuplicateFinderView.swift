@@ -245,7 +245,7 @@ struct DuplicateFinderView: View {
                 Button("Remove Selected (\(selectedForRemoval.count))") {
                     showRemoveConfirmation = true
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .tint(.red)
                 .disabled(isRemoving)
             }

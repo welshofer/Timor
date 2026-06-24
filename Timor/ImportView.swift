@@ -146,7 +146,7 @@ struct ImportView: View {
             Button("Choose CSV File...") {
                 showFileImporter = true
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .disabled(isImporting)
         }
         .padding()
@@ -254,7 +254,7 @@ struct ImportView: View {
                         await importFromURLs()
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(isImporting)
             }
         }
