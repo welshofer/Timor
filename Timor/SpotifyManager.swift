@@ -92,6 +92,8 @@ class SpotifyManager: ObservableObject {
     @Published var lastError: String?
     @Published var lastErrorRecovery: String?
     @Published var showError = false
+    /// USE-5: transient, non-error status message (e.g. the result of a bulk like/unlike).
+    @Published var infoMessage: String?
     @Published var lastCacheUpdate: Date?
     @Published var isUsingCache = false
     @Published var modelContainerFailed = false
@@ -547,6 +549,9 @@ class SpotifyManager: ObservableObject {
         }
 
         Self.logger.info("Bulk like completed: \(succeeded) succeeded, \(failed) failed")
+        infoMessage = failed == 0
+            ? "Liked \(succeeded) track\(succeeded == 1 ? "" : "s")"
+            : "Liked \(succeeded) of \(succeeded + failed) — \(failed) failed"
         return (succeeded, failed)
     }
 
@@ -591,6 +596,9 @@ class SpotifyManager: ObservableObject {
         }
 
         Self.logger.info("Bulk unlike completed: \(succeeded) succeeded, \(failed) failed")
+        infoMessage = failed == 0
+            ? "Removed \(succeeded) track\(succeeded == 1 ? "" : "s") from Liked Songs"
+            : "Removed \(succeeded) of \(succeeded + failed) — \(failed) failed"
         return (succeeded, failed)
     }
 

@@ -102,6 +102,11 @@ struct TrackTableView: View {
 
     var body: some View {
         Table(sortedFilteredTracks, selection: safeSelection, sortOrder: $sortOrder) {
+            // ATTR-5: album-art thumbnail column (cached via ImageCache).
+            TableColumn("") { track in
+                TrackArtworkThumbnail(urlString: track.albumArtURL)
+            }
+            .width(40)
             TableColumn("Title", value: \.name)
                 .width(min: 200)
             TableColumn("Artist", value: \.artist)
@@ -110,8 +115,12 @@ struct TrackTableView: View {
                 .width(min: 150)
             TableColumn("Release Date", value: \.releaseDate)
                 .width(120)
-            TableColumn("Duration", value: \.duration)
-                .width(80)
+            // FUNC-2: sort by numeric durationSeconds; display the "M:SS" string.
+            TableColumn("Duration", value: \.durationSeconds) { track in
+                Text(track.duration)
+                    .monospacedDigit()
+            }
+            .width(80)
             TableColumn(Text(Image(systemName: "heart.fill")).font(.caption)) { track in
                 LikeButton(track: track, spotifyManager: spotifyManager)
             }
@@ -148,6 +157,12 @@ struct TrackTableView: View {
                 searchText: debouncedSearchText,
                 isSortingActive: isSortingActive
             )
+        }
+        .onDeleteCommand {
+            // USE-2: ⌫ deletes the current selection (standard Mac idiom).
+            if !selectedTracks.isEmpty, playlist?.isEditable == true {
+                showDeleteConfirmation = true
+            }
         }
         // Optimized ID: only includes playlist ID and search text, not count
         // This prevents full table rebuild on track additions/removals
@@ -269,9 +284,52 @@ struct LikeButton: View {
         }) {
             Image(systemName: track.isLiked ? "heart.fill" : "heart")
                 .foregroundColor(track.isLiked ? .red : .secondary)
+                .contentTransition(.symbolEffect(.replace))   // ATTR-4: animated toggle
+                .symbolEffect(.bounce, value: track.isLiked)
         }
         .buttonStyle(.borderless)
         .help(track.isLiked ? "Remove from Liked Songs" : "Add to Liked Songs")
+        .accessibilityLabel(track.isLiked ? "Liked" : "Not liked")   // USE-3
+        .accessibilityHint("Toggles whether this track is in your Liked Songs")
+    }
+}
+
+/// ATTR-5: Small album-art thumbnail for the macOS track table, backed by ImageCache
+/// (memory + disk), so scrolling reuses cached art instead of refetching.
+struct TrackArtworkThumbnail: View {
+    let urlString: String?
+    @State private var image: PlatformImage?
+
+    var body: some View {
+        Group {
+            if let image = image {
+                platformImage(image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .overlay(
+                        Image(systemName: "music.note")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .accessibilityHidden(true)
+        .task(id: urlString) {
+            guard let urlString = urlString, !urlString.isEmpty else {
+                image = nil
+                return
+            }
+            if let cached = ImageCache.shared.image(for: urlString) {
+                image = cached
+            } else {
+                image = await ImageCache.shared.image(from: urlString)
+            }
+        }
     }
 }
 

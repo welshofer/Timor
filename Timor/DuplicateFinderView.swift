@@ -79,7 +79,7 @@ struct DuplicateFinderView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will permanently remove the selected duplicate tracks from the playlist. This action cannot be undone.")
+            Text("This will remove the selected duplicate tracks from the playlist. You can undo it with ⌘Z.")
         }
     }
 
