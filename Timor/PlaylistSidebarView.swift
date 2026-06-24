@@ -427,31 +427,39 @@ struct PlaylistRow: View {
                 return false
             }
 
-            // Load tracks from the first provider
-            guard let provider = providers.first else { return false }
+            // The native NSTableView drag writes one pasteboard item per row, so collect tracks
+            // from ALL providers (each is a single track, or — from older drags — an array),
+            // then add them in one batch.
+            let group = DispatchGroup()
+            let lock = NSLock()
+            var collected: [SpotifyManager.Track] = []
 
-            provider.loadDataRepresentation(forTypeIdentifier: "xsf.welshofer.Timor.spotifytrack") { data, error in
-                guard let data = data else {
-                    logger.error("Drop failed: \(error?.localizedDescription ?? "No data")")
-                    return
+            for provider in providers {
+                group.enter()
+                provider.loadDataRepresentation(forTypeIdentifier: "xsf.welshofer.Timor.spotifytrack") { data, error in
+                    defer { group.leave() }
+                    guard let data = data else {
+                        logger.error("Drop failed: \(error?.localizedDescription ?? "No data")")
+                        return
+                    }
+                    let decoder = JSONDecoder()
+                    var dropped: [SpotifyManager.Track] = []
+                    if let tracks = try? decoder.decode([SpotifyManager.Track].self, from: data) {
+                        dropped = tracks
+                    } else if let track = try? decoder.decode(SpotifyManager.Track.self, from: data) {
+                        dropped = [track]
+                    }
+                    guard !dropped.isEmpty else { return }
+                    lock.lock()
+                    collected.append(contentsOf: dropped)
+                    lock.unlock()
                 }
+            }
 
-                let decoder = JSONDecoder()
-                // Try decoding as array first, then single track
-                if let tracks = try? decoder.decode([SpotifyManager.Track].self, from: data) {
-                    Task { @MainActor in
-                        await SpotifyManager.shared.addTracksToPlaylist(
-                            playlist.id,
-                            tracks: tracks
-                        )
-                    }
-                } else if let track = try? decoder.decode(SpotifyManager.Track.self, from: data) {
-                    Task { @MainActor in
-                        await SpotifyManager.shared.addTracksToPlaylist(
-                            playlist.id,
-                            tracks: [track]
-                        )
-                    }
+            group.notify(queue: .main) {
+                guard !collected.isEmpty else { return }
+                Task { @MainActor in
+                    await SpotifyManager.shared.addTracksToPlaylist(playlist.id, tracks: collected)
                 }
             }
             return true
