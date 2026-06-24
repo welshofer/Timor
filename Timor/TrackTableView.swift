@@ -294,11 +294,16 @@ struct LikeButton: View {
     }
 }
 
-/// ATTR-5: Small album-art thumbnail for the macOS track table, backed by ImageCache
-/// (memory + disk), so scrolling reuses cached art instead of refetching.
+/// ATTR-5: Small album-art thumbnail for the macOS track table. Uses ImageCache's
+/// DOWNSAMPLED thumbnail path so disk IO and decoding happen off the main thread and the
+/// cached image is tiny — this is what keeps the table scrolling smoothly (decoding full
+/// 640×640 art per row on the main thread is what made it janky).
 struct TrackArtworkThumbnail: View {
     let urlString: String?
     @State private var image: PlatformImage?
+
+    /// Target thumbnail size in pixels (32pt cell at up to ~3× Retina).
+    private static let maxPixel: CGFloat = 96
 
     var body: some View {
         Group {
@@ -324,10 +329,11 @@ struct TrackArtworkThumbnail: View {
                 image = nil
                 return
             }
-            if let cached = ImageCache.shared.image(for: urlString) {
+            // Instant for recycled rows (memory only, no IO); otherwise decode off-main.
+            if let cached = ImageCache.shared.cachedThumbnail(for: urlString, maxPixel: Self.maxPixel) {
                 image = cached
             } else {
-                image = await ImageCache.shared.image(from: urlString)
+                image = await ImageCache.shared.thumbnail(for: urlString, maxPixel: Self.maxPixel)
             }
         }
     }
