@@ -156,3 +156,33 @@ final class SpotifySearchQueryTests: XCTestCase {
         XCTAssertEqual(query, "track:Hello artist:Adele album:25 year:2015")
     }
 }
+
+// MARK: - FUNC-2: Track duration sorting
+
+@MainActor
+final class TrackDurationSortTests: XCTestCase {
+
+    private func track(duration: String) -> SpotifyManager.Track {
+        SpotifyManager.Track(
+            id: "i", trackId: "t", name: "n", artist: "a", album: "al",
+            releaseDate: "2024", duration: duration, uri: "u", albumArtURL: nil
+        )
+    }
+
+    func testDurationSecondsParsesMinutesAndSeconds() {
+        XCTAssertEqual(track(duration: "3:45").durationSeconds, 225)
+        XCTAssertEqual(track(duration: "0:30").durationSeconds, 30)
+        XCTAssertEqual(track(duration: "10:05").durationSeconds, 605)
+    }
+
+    func testLongerTrackSortsAfterShorterNumerically() {
+        // The bug: as strings, "10:05" < "9:30". durationSeconds must order them correctly.
+        XCTAssertLessThan("10:05", "9:30") // documents the broken lexicographic ordering
+        XCTAssertGreaterThan(track(duration: "10:05").durationSeconds, track(duration: "9:30").durationSeconds)
+    }
+
+    func testMalformedDurationIsZero() {
+        XCTAssertEqual(track(duration: "").durationSeconds, 0)
+        XCTAssertEqual(track(duration: "bad").durationSeconds, 0)
+    }
+}

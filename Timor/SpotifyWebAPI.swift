@@ -537,6 +537,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
     private var authSession: ASWebAuthenticationSession?
     /// SEC-1: the `state` value sent on the current auth request, used to validate the callback.
     private var pendingAuthState: String?
+    /// REL-1: in-flight refresh (single-flight) so concurrent 401s share one refresh.
+    private var refreshTask: Task<Bool, Never>?
+    /// REL-1: when the last refresh completed, to break tight refresh→retry→401 loops.
+    private var lastRefreshCompleted: Date?
     private var currentUserId: String?
     @MainActor private var tokenRefreshTimer: Timer?
 
@@ -824,7 +828,31 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
     }
 
+    /// REL-1: Refreshes the access token, but bounds the 401→refresh→retry cycle so a
+    /// persistently-rejected token logs out instead of recursing forever:
+    /// - single-flight: concurrent callers (e.g. many endpoints 401-ing on expiry) share one refresh;
+    /// - cooldown: if a refresh completed <2s ago and we're asked again, the just-issued token is
+    ///   being rejected too, so we stop refreshing and return false (callers then log out).
     func refreshAccessToken() async -> Bool {
+        if let existing = refreshTask {
+            return await existing.value
+        }
+        if let last = lastRefreshCompleted, Date().timeIntervalSince(last) < 2 {
+            Self.logger.warning("Token was refreshed <2s ago but is still rejected; aborting refresh loop")
+            return false
+        }
+        let task = Task<Bool, Never> { [weak self] in
+            guard let self = self else { return false }
+            return await self.performTokenRefresh()
+        }
+        refreshTask = task
+        let result = await task.value
+        refreshTask = nil
+        lastRefreshCompleted = Date()
+        return result
+    }
+
+    private func performTokenRefresh() async -> Bool {
         guard let refreshToken = refreshToken else { return false }
         guard let url = URL(string: tokenURL) else { return false }
 
