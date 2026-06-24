@@ -631,7 +631,7 @@ struct CreateFolderSheet: View {
                 }
                 .keyboardShortcut(.return)
                 .disabled(folderName.trimmingCharacters(in: .whitespaces).isEmpty)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
             }
         }
         .padding(Constants.UI.largePadding)
@@ -667,7 +667,7 @@ struct RenameFolderSheet: View {
                 }
                 .keyboardShortcut(.return)
                 .disabled(folderName.trimmingCharacters(in: .whitespaces).isEmpty)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
             }
         }
         .padding(Constants.UI.largePadding)
@@ -698,7 +698,7 @@ struct RenamePlaylistSheet: View {
                 Button("Rename") { onRename() }
                     .keyboardShortcut(.return)
                     .disabled(playlistName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
             }
         }
         .padding(Constants.UI.largePadding)

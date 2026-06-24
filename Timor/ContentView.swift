@@ -234,7 +234,7 @@ struct CreatePlaylistSheet: View {
                 Button("Create") {
                     createPlaylist()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(newPlaylistName.isEmpty || isCreatingPlaylist)
             }
         }

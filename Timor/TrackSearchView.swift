@@ -99,7 +99,7 @@ struct TrackSearchView: View {
                     Button("Search") {
                         performSearch()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(isSearching || (titleSearch.isEmpty && artistSearch.isEmpty && albumSearch.isEmpty && yearSearch.isEmpty))
                 }
             }
@@ -194,7 +194,7 @@ struct TrackSearchView: View {
                 Button("Add Selected") {
                     addSelectedTracks()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(selectedTracks.isEmpty || isAdding)
             }
             .padding()
