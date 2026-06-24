@@ -412,15 +412,26 @@ extension SpotifyManager {
         // Get existing track IDs for duplicate detection
         let existingTrackIds = Set(currentPlaylistTracks.map { $0.trackId })
 
+        var candidates: [(id: String, source: String)] = []
         for urlString in urls {
             if let trackId = parseSpotifyTrackId(from: urlString) {
                 if skipDuplicates && existingTrackIds.contains(trackId) {
                     duplicatesSkipped += 1
                     continue
                 }
-                trackUrisToAdd.append("spotify:track:\(trackId)")
+                candidates.append((trackId, urlString))
             } else {
                 notFound.append(urlString)
+            }
+        }
+
+        // FUNC-4: verify the parsed IDs resolve to real tracks before adding them.
+        let validIds = await SpotifyWebAPI.shared.fetchExistingTrackIds(candidates.map { $0.id })
+        for candidate in candidates {
+            if validIds.contains(candidate.id) {
+                trackUrisToAdd.append("spotify:track:\(candidate.id)")
+            } else {
+                notFound.append(candidate.source)
             }
         }
 

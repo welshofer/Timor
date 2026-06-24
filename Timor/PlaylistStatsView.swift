@@ -150,8 +150,11 @@ struct PlaylistStatsView: View {
     let isViewingLikedSongs: Bool
     @Binding var isPresented: Bool
 
-    private var stats: PlaylistStatistics {
-        PlaylistStatistics.compute(from: spotifyManager.currentPlaylistTracks)
+    // PERF-1: compute the (O(n) aggregation) stats once when tracks change, not ~14× per render.
+    @State private var stats = PlaylistStatistics.compute(from: [])
+
+    private func recomputeStats() {
+        stats = PlaylistStatistics.compute(from: spotifyManager.currentPlaylistTracks)
     }
 
     var body: some View {
@@ -195,6 +198,8 @@ struct PlaylistStatsView: View {
             footerView
         }
         .frame(width: 500, height: 550)
+        .onAppear { recomputeStats() }
+        .onChange(of: spotifyManager.currentPlaylistTracks) { _, _ in recomputeStats() }
     }
 
     // MARK: - Header

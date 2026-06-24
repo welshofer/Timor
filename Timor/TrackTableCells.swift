@@ -148,4 +148,17 @@ final class TrackNSTableView: NSTableView {
         super.keyDown(with: event)
     }
 }
+
+// MARK: - Context-menu move commands (used by the table coordinator)
+
+enum MoveDest { case top, upward, downward, bottom }
+
+final class MoveCommand: NSObject {
+    let track: SpotifyManager.Track
+    let dest: MoveDest
+    init(track: SpotifyManager.Track, dest: MoveDest) {
+        self.track = track
+        self.dest = dest
+    }
+}
 #endif

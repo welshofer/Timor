@@ -66,12 +66,23 @@ private enum TrackColumn: String, CaseIterable {
         }
     }
 
+    /// ATTR-3: the like column gets an SF Symbol header instead of a raw "♥" glyph.
+    func applyHeader(to tableColumn: NSTableColumn) {
+        guard self == .liked else {
+            tableColumn.title = title
+            return
+        }
+        let headerCell = NSTableHeaderCell(textCell: "")
+        headerCell.image = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: "Liked")
+        tableColumn.headerCell = headerCell
+    }
+
     func text(for track: SpotifyManager.Track) -> String {
         switch self {
         case .title: return track.name
         case .artist: return track.artist
         case .album: return track.album
-        case .releaseDate: return track.releaseDate
+        case .releaseDate: return track.displayReleaseDate
         case .duration: return track.duration
         case .artwork, .liked: return ""
         }
@@ -112,7 +123,7 @@ struct TrackTableRepresentable: NSViewRepresentable {
 
         for column in TrackColumn.allCases {
             let tableColumn = NSTableColumn(identifier: column.id)
-            tableColumn.title = column.title
+            column.applyHeader(to: tableColumn)  // ATTR-3
             tableColumn.width = column.width
             tableColumn.minWidth = column.minWidth
             if column.comparator(ascending: true) != nil {
@@ -155,12 +166,21 @@ struct TrackTableRepresentable: NSViewRepresentable {
             self.parent = parent
         }
 
-        /// Reload only when the displayed identities or liked-state actually change.
+        /// PERF-2: reload only the rows that changed (e.g. one like) rather than the whole table.
         func apply(tracks newTracks: [SpotifyManager.Track]) {
-            let changed = tracks.map(\.id) != newTracks.map(\.id)
-                || tracks.map(\.isLiked) != newTracks.map(\.isLiked)
+            guard let tableView = tableView else { tracks = newTracks; return }
+            if tracks.map(\.id) != newTracks.map(\.id) {
+                tracks = newTracks
+                tableView.reloadData()   // structure changed (add/remove/reorder/switch)
+                return
+            }
+            var changed = IndexSet()
+            for (index, pair) in zip(tracks, newTracks).enumerated() where pair.0 != pair.1 {
+                changed.insert(index)
+            }
             tracks = newTracks
-            if changed { tableView?.reloadData() }
+            guard !changed.isEmpty else { return }
+            tableView.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(0..<tableView.numberOfColumns))
         }
 
         func applySelection(_ ids: Set<SpotifyManager.Track.ID>) {
@@ -375,17 +395,6 @@ struct TrackTableRepresentable: NSViewRepresentable {
                 )
             }
         }
-    }
-}
-
-private enum MoveDest { case top, upward, downward, bottom }
-
-private final class MoveCommand: NSObject {
-    let track: SpotifyManager.Track
-    let dest: MoveDest
-    init(track: SpotifyManager.Track, dest: MoveDest) {
-        self.track = track
-        self.dest = dest
     }
 }
 #endif

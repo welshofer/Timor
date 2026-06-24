@@ -186,3 +186,40 @@ final class TrackDurationSortTests: XCTestCase {
         XCTAssertEqual(track(duration: "bad").durationSeconds, 0)
     }
 }
+
+// MARK: - FUNC-1: Raw release dates
+
+@MainActor
+final class ReleaseDateTests: XCTestCase {
+
+    private func track(releaseDate: String) -> SpotifyManager.Track {
+        SpotifyManager.Track(
+            id: "i", trackId: "t", name: "n", artist: "a", album: "al",
+            releaseDate: releaseDate, duration: "3:00", uri: "u", albumArtURL: nil
+        )
+    }
+
+    func testFormatReleaseFullDate() {
+        XCTAssertEqual(SpotifyDateFormatters.formatRelease("2023-10-15"), "Oct 15, 2023")
+    }
+
+    func testFormatReleaseYearMonth() {
+        XCTAssertEqual(SpotifyDateFormatters.formatRelease("2023-10"), "Oct 2023")
+    }
+
+    func testFormatReleaseYearOnly() {
+        XCTAssertEqual(SpotifyDateFormatters.formatRelease("2023"), "2023")
+    }
+
+    func testRawDateEnablesYearExtraction() {
+        // The bug: "Oct 15, 2023".prefix(4) == "Oct ". Storing raw yields a real year.
+        let track = track(releaseDate: "2023-10-15")
+        XCTAssertEqual(Int(track.releaseDate.prefix(4)), 2023)
+        XCTAssertEqual(track.displayReleaseDate, "Oct 15, 2023")
+    }
+
+    func testRawIsoDatesSortChronologically() {
+        // Raw ISO sorts chronologically as text; formatted "MMM…" did not.
+        XCTAssertLessThan("1999-12-01", "2020-04-01")
+    }
+}

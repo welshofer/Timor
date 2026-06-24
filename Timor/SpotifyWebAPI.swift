@@ -26,7 +26,7 @@ private let spotifyAPILogger = Logger(subsystem: "com.timor", category: "spotify
 /// formatting once configured (and never mutated), so reusing these avoids allocating a
 /// fresh, expensive formatter per track (PERF-1). HTTP-date parsing uses a fixed POSIX
 /// locale + GMT so it works regardless of device locale (REL-4).
-private enum SpotifyDateFormatters {
+enum SpotifyDateFormatters {
     nonisolated static let isoFullDate: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -56,6 +56,20 @@ private enum SpotifyDateFormatters {
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         return formatter
     }()
+
+    /// FUNC-1: Formats a RAW Spotify release date ("2023-10-15" / "2023-10" / "2023") for
+    /// display ("Oct 15, 2023" / "Oct 2023" / "2023"). The raw value is what gets stored on
+    /// Track so year extraction, decade buckets, and chronological sort work correctly.
+    nonisolated static func formatRelease(_ raw: String) -> String {
+        let components = raw.split(separator: "-")
+        if components.count == 3, let date = isoFullDate.date(from: raw) {
+            return displayFullDate.string(from: date)
+        }
+        if components.count == 2, let date = isoYearMonth.date(from: raw) {
+            return displayYearMonth.string(from: date)
+        }
+        return raw  // year-only, empty, or unparseable: show as-is
+    }
 }
 
 // MARK: - Spotify Errors
@@ -590,7 +604,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
         // Combine credentials
         var credentials = clientIdData
-        credentials.append(":".data(using: .utf8)!)
+        credentials.append(Data(":".utf8))  // STAB-2: non-failing UTF-8 encode
         credentials.append(secretData)
 
         let base64 = credentials.base64EncodedString()
@@ -713,7 +727,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         let state = UUID().uuidString
         pendingAuthState = state  // SEC-1: remember it to validate the callback
 
-        var components = URLComponents(string: authURL)!
+        guard var components = URLComponents(string: authURL) else {  // STAB-2: no force unwrap
+            Self.logger.error("Invalid authorization URL")
+            return
+        }
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "response_type", value: "code"),
@@ -931,8 +948,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return nil
     }
 
-    func fetchUserPlaylists() async -> [SpotifyManager.Playlist] {
-        guard let accessToken = accessToken else { return [] }
+    func fetchUserPlaylists() async -> (playlists: [SpotifyManager.Playlist], complete: Bool) {
+        guard let accessToken = accessToken else { return ([], true) }
 
         // Get current user ID if we don't have it
         if currentUserId == nil {
@@ -944,6 +961,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         var offset = 0
         let limit = Constants.Spotify.playlistFetchLimit
         var hasMore = true
+        var complete = true  // REL-2: did we page through everything without error?
 
         while hasMore {
             guard let url = URL(string: "\(baseURL)/me/playlists?limit=\(limit)&offset=\(offset)") else { break }
@@ -960,7 +978,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return await fetchUserPlaylists()
                     } else {
                         logout()
-                        return []
+                        return ([], false)
                     }
                 }
 
@@ -968,13 +986,17 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
                 allPlaylists.append(contentsOf: playlistResponse.items.map { item in
                     let isOwner = currentUserId != nil && item.owner.id == currentUserId
+                    // ATTR-1: pick the largest available cover image.
+                    let coverArtURL = item.images?.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })?.url
+                        ?? item.images?.first?.url
                     return SpotifyManager.Playlist(
                         id: item.id,
                         name: item.name,
                         totalTracks: item.tracks.total,
                         owner: item.owner.display_name ?? item.owner.id,
                         description: item.description,
-                        isEditable: isOwner || item.collaborative
+                        isEditable: isOwner || item.collaborative,
+                        coverArtURL: coverArtURL
                     )
                 })
 
@@ -982,11 +1004,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 offset += limit
             } catch {
                 spotifyAPILogger.error("Error fetching playlists: \(error)")
+                complete = false  // REL-2: stopped short — surface this to the user
                 hasMore = false
             }
         }
 
-        return allPlaylists
+        return (allPlaylists, complete)
     }
 
     func fetchPlaylistTracks(playlistId: String, progressHandler: ((Int, Int) -> Void)? = nil) async -> [SpotifyManager.Track] {
@@ -1035,7 +1058,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         name: track.name,
                         artist: track.artists.map { $0.name }.joined(separator: ", "),
                         album: track.album.name,
-                        releaseDate: formatReleaseDate(track.album.release_date),
+                        releaseDate: track.album.release_date ?? "",  // FUNC-1: store raw ISO
                         duration: formatDuration(track.duration_ms),
                         uri: track.uri,
                         albumArtURL: albumArtURL
@@ -1071,34 +1094,6 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return String(format: "%d:%02d", minutes, remainingSeconds)
     }
 
-    private func formatReleaseDate(_ dateString: String?) -> String {
-        guard let dateString = dateString else { return "" }
-
-        // Spotify returns dates in different formats:
-        // - Full date: "2023-10-15"
-        // - Year and month: "2023-10"
-        // - Year only: "2023"
-
-        let components = dateString.split(separator: "-")
-
-        if components.count == 3 {
-            // Full date - format as MMM d, yyyy (PERF-1: reuse shared formatters)
-            if let date = SpotifyDateFormatters.isoFullDate.date(from: dateString) {
-                return SpotifyDateFormatters.displayFullDate.string(from: date)
-            }
-        } else if components.count == 2 {
-            // Year and month - format as MMM yyyy
-            if let date = SpotifyDateFormatters.isoYearMonth.date(from: dateString) {
-                return SpotifyDateFormatters.displayYearMonth.string(from: date)
-            }
-        } else if components.count == 1 {
-            // Year only
-            return dateString
-        }
-
-        return dateString
-    }
-
     /// FUNC-3: builds a Spotify search query string. Single-word field values are left
     /// unquoted so they match partially; multi-word values are quoted to preserve phrase
     /// matching. Extracted as a pure function so it can be unit-tested.
@@ -1117,7 +1112,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return parts.joined(separator: " ")
     }
 
-    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50, offset: Int = 0) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
         // FUNC-3: relaxed query — single-word terms unquoted (partial match), phrases quoted.
@@ -1129,7 +1124,9 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
 
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
-        guard let url = URL(string: "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)") else { return [] }
+        // FUNC-5: offset enables "Load more" pagination beyond the first 50.
+        let searchPath = "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)&offset=\(offset)"
+        guard let url = URL(string: searchPath) else { return [] }
 
         spotifyAPILogger.debug("Search query: \(query)")
         spotifyAPILogger.debug("Search URL: \(url.absoluteString)")
@@ -1150,7 +1147,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                 if await refreshAccessToken() {
-                    return await searchTracks(title: title, artist: artist, album: album, year: year, limit: limit)
+                    return await searchTracks(
+                        title: title, artist: artist, album: album,
+                        year: year, limit: limit, offset: offset
+                    )
                 } else {
                     logout()
                     return []
@@ -1288,7 +1288,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                                 name: name,
                                 artist: artistName,
                                 album: albumName,
-                                releaseDate: formatReleaseDate(releaseDate),
+                                releaseDate: releaseDate,  // FUNC-1: store raw ISO
                                 duration: formatDuration(duration_ms),
                                 uri: uri,
                                 albumArtURL: albumArtURL,
@@ -1305,6 +1305,31 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
 
         return ([], 0)
+    }
+
+    /// FUNC-4: Returns the subset of `ids` that resolve to real Spotify tracks (GET /tracks?ids=).
+    func fetchExistingTrackIds(_ ids: [String]) async -> Set<String> {
+        guard let accessToken = accessToken, !ids.isEmpty else { return [] }
+        var valid: Set<String> = []
+        for chunk in ids.chunked(into: Constants.Spotify.trackCheckBatchSize) {
+            let idsParam = chunk.joined(separator: ",")
+            guard let encoded = idsParam.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "\(baseURL)/tracks?ids=\(encoded)") else { continue }
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            do {
+                let (data, _) = try await rateLimitedRequest(for: request)
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let tracks = json["tracks"] as? [Any?] {
+                    for case let track as [String: Any] in tracks {
+                        if let id = track["id"] as? String { valid.insert(id) }
+                    }
+                }
+            } catch {
+                spotifyAPILogger.error("Track validation error: \(error)")
+            }
+        }
+        return valid
     }
 
     func checkSavedTracks(trackIds: [String]) async -> [Bool] {
@@ -1797,6 +1822,7 @@ struct PlaylistItem: Codable {
     let owner: Owner
     let tracks: Tracks
     let collaborative: Bool
+    let images: [AlbumImage]?  // ATTR-1: playlist cover art
 }
 
 struct Owner: Codable {
