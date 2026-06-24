@@ -88,6 +88,8 @@ struct TrackTableRepresentable: NSViewRepresentable {
     @Binding var showDeleteConfirmation: Bool
     let playlist: SpotifyManager.Playlist?
     let spotifyManager: SpotifyManager
+    /// Drag-to-reorder is only valid in playlist order (editable, not sorted, not filtered).
+    let canReorder: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -104,7 +106,8 @@ struct TrackTableRepresentable: NSViewRepresentable {
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
         tableView.doubleAction = #selector(Coordinator.tableDoubleClicked(_:))
-        tableView.setDraggingSourceOperationMask(.copy, forLocal: true)
+        // .move for internal reorder, .copy for dropping onto a sidebar playlist (both local).
+        tableView.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
         tableView.setDraggingSourceOperationMask(.copy, forLocal: false)
 
         for column in TrackColumn.allCases {
@@ -117,6 +120,10 @@ struct TrackTableRepresentable: NSViewRepresentable {
             }
             tableView.addTableColumn(tableColumn)
         }
+
+        // Accept internal drops so rows can be reordered by dragging.
+        tableView.registerForDraggedTypes([trackPasteboardType])
+        tableView.draggingDestinationFeedbackStyle = .gap
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -228,6 +235,36 @@ struct TrackTableRepresentable: NSViewRepresentable {
             let item = NSPasteboardItem()
             item.setData(data, forType: trackPasteboardType)
             return item
+        }
+
+        // MARK: Drag-to-reorder (internal drops; dragging OUT to a sidebar playlist is handled there)
+
+        func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
+                       proposedRow row: Int,
+                       proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+            // Only reorder for drags that originate from THIS table, and only in playlist order.
+            guard parent.canReorder, (info.draggingSource as? NSTableView) === tableView else { return [] }
+            if dropOperation == .on {
+                tableView.setDropRow(row, dropOperation: .above)
+            }
+            return .move
+        }
+
+        func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
+                       row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+            guard parent.canReorder, let playlist = parent.playlist else { return false }
+            let items = info.draggingPasteboard.pasteboardItems ?? []
+            let draggedIDs: [String] = items.compactMap { item in
+                guard let data = item.data(forType: trackPasteboardType),
+                      let track = try? JSONDecoder().decode(SpotifyManager.Track.self, from: data) else { return nil }
+                return track.id
+            }
+            let sourceIndexes = IndexSet(draggedIDs.compactMap { id in tracks.firstIndex(where: { $0.id == id }) })
+            guard !sourceIndexes.isEmpty else { return false }
+            Task {
+                await parent.spotifyManager.reorderTracks(in: playlist.id, from: sourceIndexes, to: row)
+            }
+            return true
         }
 
         // MARK: Actions
@@ -349,29 +386,6 @@ private final class MoveCommand: NSObject {
     init(track: SpotifyManager.Track, dest: MoveDest) {
         self.track = track
         self.dest = dest
-    }
-}
-
-/// NSTableView subclass that routes right-click into the coordinator's menu builder.
-final class TrackNSTableView: NSTableView {
-    weak var coordinator: TrackTableRepresentable.Coordinator?
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let point = convert(event.locationInWindow, from: nil)
-        let row = self.row(at: point)
-        guard row >= 0 else { return nil }
-        if !selectedRowIndexes.contains(row) {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        }
-        return coordinator?.menu(forClickedRow: row)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        // 51 = Delete/Backspace, 117 = forward delete.
-        if event.keyCode == 51 || event.keyCode == 117, coordinator?.handleDeleteKey() == true {
-            return
-        }
-        super.keyDown(with: event)
     }
 }
 #endif

@@ -124,4 +124,28 @@ final class TrackTextCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 }
+
+/// NSTableView subclass that routes right-click into the coordinator's menu builder and
+/// handles the ⌫ delete key.
+final class TrackNSTableView: NSTableView {
+    weak var coordinator: TrackTableRepresentable.Coordinator?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        guard row >= 0 else { return nil }
+        if !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return coordinator?.menu(forClickedRow: row)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // 51 = Delete/Backspace, 117 = forward delete.
+        if event.keyCode == 51 || event.keyCode == 117, coordinator?.handleDeleteKey() == true {
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
 #endif

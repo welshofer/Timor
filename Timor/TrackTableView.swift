@@ -70,7 +70,11 @@ struct TrackTableView: View {
             selectedTrack: $selectedTrack,
             showDeleteConfirmation: $showDeleteConfirmation,
             playlist: playlist,
-            spotifyManager: spotifyManager
+            spotifyManager: spotifyManager,
+            canReorder: playlist?.isEditable == true
+                && sortOrder.isEmpty
+                && debouncedSearchText.isEmpty
+                && !trackFilter.isActive
         )
         .safeAreaInset(edge: .top) {
             HStack(spacing: 12) {
