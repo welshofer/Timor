@@ -22,10 +22,11 @@ struct TrackTableView: View {
     @State private var debouncedSearchText: String = ""
     @State private var searchDebounceTask: Task<Void, Never>?
 
-    // Cached filtered results to avoid recomputation
-    @State private var cachedFilteredTracks: [SpotifyManager.Track] = []
-    @State private var lastTrackCount: Int = 0
-    @State private var lastSearchText: String = ""
+    // PERF-3: materialized filtered + sorted tracks. Recomputed once when inputs change
+    // (search/filter/sort/track-list) instead of re-sorting on every body render and every
+    // read of the selection binding. `displayIDs` lets safeSelection avoid rebuilding a Set.
+    @State private var displayTracks: [SpotifyManager.Track] = []
+    @State private var displayIDs: Set<SpotifyManager.Track.ID> = []
 
     // Sorting state
     @State private var sortOrder: [KeyPathComparator<SpotifyManager.Track>] = []
@@ -34,16 +35,10 @@ struct TrackTableView: View {
     @State private var trackFilter = TrackFilter()
     @State private var showFilterPopover = false
 
-    var filteredTracks: [SpotifyManager.Track] {
-        // Use cached results if inputs haven't changed
-        let currentTrackCount = spotifyManager.currentPlaylistTracks.count
-        if debouncedSearchText == lastSearchText && currentTrackCount == lastTrackCount && !trackFilter.isActive {
-            return cachedFilteredTracks
-        }
-
+    /// PERF-3: recomputes the filtered + sorted display list once, when an input changes.
+    private func recomputeDisplayTracks() {
         var result = spotifyManager.currentPlaylistTracks
 
-        // Apply text search filter
         if !debouncedSearchText.isEmpty {
             let lowercasedSearch = debouncedSearchText.lowercased()
             result = result.filter { track in
@@ -53,35 +48,30 @@ struct TrackTableView: View {
             }
         }
 
-        // Apply advanced filter
         if trackFilter.isActive {
             result = result.filter { trackFilter.matches($0) }
         }
 
-        return result
+        if !sortOrder.isEmpty {
+            result.sort(using: sortOrder)
+        }
+
+        displayTracks = result
+        displayIDs = Set(result.map { $0.id })
     }
 
-    /// Sorted and filtered tracks for display
-    var sortedFilteredTracks: [SpotifyManager.Track] {
-        if sortOrder.isEmpty {
-            return filteredTracks
-        }
-        return filteredTracks.sorted(using: sortOrder)
-    }
-    
-    // Safe selection that only includes tracks in current filtered results
+    // Safe selection that only includes tracks in the current display set.
     var safeSelection: Binding<Set<SpotifyManager.Track.ID>> {
         Binding(
             get: {
-                let validIDs = Set(sortedFilteredTracks.map { $0.id })
-                return selectedTracks.intersection(validIDs)
+                selectedTracks.intersection(displayIDs)
             },
             set: { newSelection in
                 selectedTracks = newSelection
                 // Update selected track for inspector
                 if let firstId = newSelection.first,
                    newSelection.count == 1,
-                   let track = sortedFilteredTracks.first(where: { $0.id == firstId }) {
+                   let track = displayTracks.first(where: { $0.id == firstId }) {
                     selectedTrack = track
                 } else if newSelection.isEmpty {
                     selectedTrack = nil
@@ -92,7 +82,7 @@ struct TrackTableView: View {
 
     /// Tracks that are currently selected (for drag & drop)
     var selectedTrackObjects: [SpotifyManager.Track] {
-        sortedFilteredTracks.filter { selectedTracks.contains($0.id) }
+        displayTracks.filter { selectedTracks.contains($0.id) }
     }
 
     /// Whether sorting is currently active
@@ -101,7 +91,7 @@ struct TrackTableView: View {
     }
 
     var body: some View {
-        Table(sortedFilteredTracks, selection: safeSelection, sortOrder: $sortOrder) {
+        Table(displayTracks, selection: safeSelection, sortOrder: $sortOrder) {
             // ATTR-5: album-art thumbnail column (cached via ImageCache).
             TableColumn("") { track in
                 TrackArtworkThumbnail(urlString: track.albumArtURL)
@@ -175,7 +165,7 @@ struct TrackTableView: View {
                             .foregroundStyle(.blue)
                         Text("\(trackFilter.activeFilterCount) filter\(trackFilter.activeFilterCount == 1 ? "" : "s") active")
                             .font(.caption)
-                        Text("(\(sortedFilteredTracks.count) tracks)")
+                        Text("(\(displayTracks.count) tracks)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Button {
@@ -229,7 +219,7 @@ struct TrackTableView: View {
             .padding(.vertical, 6)
             .background(.ultraThinMaterial)
         }
-        .onChange(of: searchText) { oldValue, newValue in
+        .onChange(of: searchText) { _, newValue in
             // Debounce search input - wait 300ms before filtering
             searchDebounceTask?.cancel()
             searchDebounceTask = Task {
@@ -237,33 +227,23 @@ struct TrackTableView: View {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     debouncedSearchText = newValue
-                    updateCachedFilteredTracks()
+                    recomputeDisplayTracks()
                 }
             }
         }
-        .onChange(of: spotifyManager.currentPlaylistTracks.count) { _, _ in
-            // Update cache when tracks change
-            updateCachedFilteredTracks()
+        // PERF-3: recompute only when an actual input changes, not on every body render.
+        .onChange(of: spotifyManager.currentPlaylistTracks) { _, _ in
+            recomputeDisplayTracks()
+        }
+        .onChange(of: sortOrder) { _, _ in
+            recomputeDisplayTracks()
+        }
+        .onChange(of: trackFilter) { _, _ in
+            recomputeDisplayTracks()
         }
         .onAppear {
             debouncedSearchText = searchText
-            updateCachedFilteredTracks()
-        }
-    }
-
-    private func updateCachedFilteredTracks() {
-        lastSearchText = debouncedSearchText
-        lastTrackCount = spotifyManager.currentPlaylistTracks.count
-
-        if debouncedSearchText.isEmpty {
-            cachedFilteredTracks = spotifyManager.currentPlaylistTracks
-        } else {
-            let lowercasedSearch = debouncedSearchText.lowercased()
-            cachedFilteredTracks = spotifyManager.currentPlaylistTracks.filter { track in
-                track.name.lowercased().contains(lowercasedSearch) ||
-                track.artist.lowercased().contains(lowercasedSearch) ||
-                track.album.lowercased().contains(lowercasedSearch)
-            }
+            recomputeDisplayTracks()
         }
     }
 }
