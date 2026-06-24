@@ -29,6 +29,12 @@ final class ImageCache: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let ioQueue = DispatchQueue(label: "com.timor.imagecache.io", qos: .utility)
 
+    /// PERF-2: coalesce concurrent network fetches for the same URL so the inspector and a
+    /// scrolling table don't each download the same album art. Lock-guarded (held only for
+    /// brief map mutations, never across an await).
+    private let inFlightLock = NSLock()
+    private var inFlightRequests: [String: Task<PlatformImage?, Never>] = [:]
+
     /// Maximum number of images in memory cache
     private let maxMemoryCount = 100
 
@@ -90,7 +96,31 @@ final class ImageCache: @unchecked Sendable {
             return cached
         }
 
-        // Fetch from network
+        // PERF-2: if a fetch for this URL is already in flight, await it instead of
+        // starting a second identical download. `withLock` is the async-safe scoped lock
+        // (held only for the brief map mutation, never across an await).
+        let (task, isNew): (Task<PlatformImage?, Never>, Bool) = inFlightLock.withLock {
+            if let existing = inFlightRequests[urlString] {
+                return (existing, false)
+            }
+            let newTask = Task<PlatformImage?, Never> { [weak self] in
+                await self?.fetchAndStore(urlString) ?? nil
+            }
+            inFlightRequests[urlString] = newTask
+            return (newTask, true)
+        }
+
+        let result = await task.value
+
+        if isNew {
+            inFlightLock.withLock { inFlightRequests[urlString] = nil }
+        }
+
+        return result
+    }
+
+    /// Performs the actual network fetch and stores the result in the cache.
+    private func fetchAndStore(_ urlString: String) async -> PlatformImage? {
         guard let url = URL(string: urlString) else { return nil }
 
         do {
