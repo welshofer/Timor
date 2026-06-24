@@ -986,13 +986,17 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
                 allPlaylists.append(contentsOf: playlistResponse.items.map { item in
                     let isOwner = currentUserId != nil && item.owner.id == currentUserId
+                    // ATTR-1: pick the largest available cover image.
+                    let coverArtURL = item.images?.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })?.url
+                        ?? item.images?.first?.url
                     return SpotifyManager.Playlist(
                         id: item.id,
                         name: item.name,
                         totalTracks: item.tracks.total,
                         owner: item.owner.display_name ?? item.owner.id,
                         description: item.description,
-                        isEditable: isOwner || item.collaborative
+                        isEditable: isOwner || item.collaborative,
+                        coverArtURL: coverArtURL
                     )
                 })
 
@@ -1818,6 +1822,7 @@ struct PlaylistItem: Codable {
     let owner: Owner
     let tracks: Tracks
     let collaborative: Bool
+    let images: [AlbumImage]?  // ATTR-1: playlist cover art
 }
 
 struct Owner: Codable {

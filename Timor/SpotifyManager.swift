@@ -147,6 +147,19 @@ class SpotifyManager: ObservableObject {
         let owner: String
         let description: String?
         let isEditable: Bool
+        /// ATTR-1: playlist cover art URL (defaulted so existing constructions are unaffected).
+        var coverArtURL: String?
+
+        init(id: String, name: String, totalTracks: Int, owner: String,
+             description: String?, isEditable: Bool, coverArtURL: String? = nil) {
+            self.id = id
+            self.name = name
+            self.totalTracks = totalTracks
+            self.owner = owner
+            self.description = description
+            self.isEditable = isEditable
+            self.coverArtURL = coverArtURL
+        }
     }
 
     struct Track: Identifiable, Hashable, Codable, Transferable {

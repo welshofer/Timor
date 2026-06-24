@@ -393,6 +393,7 @@ struct PlaylistRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack {
+                PlaylistCoverThumbnail(urlString: playlist.coverArtURL)  // ATTR-1
                 VStack(alignment: .leading) {
                     HStack {
                         Text(playlist.name)
@@ -731,6 +732,46 @@ struct NetworkStatusIndicator: View {
                 }
                 .foregroundStyle(.secondary)
                 .help("Showing cached data. Click refresh to update.")
+            }
+        }
+    }
+}
+
+// MARK: - Playlist Cover Thumbnail (ATTR-1)
+
+/// Small playlist cover, decoded off the main thread via ImageCache's downsampled thumbnail path.
+struct PlaylistCoverThumbnail: View {
+    let urlString: String?
+    @State private var image: PlatformImage?
+
+    var body: some View {
+        Group {
+            if let image = image {
+                platformImage(image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.gray.opacity(0.2))
+                    .overlay(
+                        Image(systemName: "music.note.list")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(width: 36, height: 36)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .accessibilityHidden(true)
+        .task(id: urlString) {
+            guard let urlString = urlString, !urlString.isEmpty else {
+                image = nil
+                return
+            }
+            if let cached = ImageCache.shared.cachedThumbnail(for: urlString, maxPixel: 80) {
+                image = cached
+            } else {
+                image = await ImageCache.shared.thumbnail(for: urlString, maxPixel: 80)
             }
         }
     }

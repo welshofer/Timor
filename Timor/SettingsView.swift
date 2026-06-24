@@ -22,12 +22,21 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Spotify App Credentials")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Connect Timor to Spotify")
                         .font(.headline)
-                    Text("Create a Spotify app at developer.spotify.com to get these credentials")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    // USE-2: guided first-run setup.
+                    Group {
+                        Text("1. Create an app in the Spotify Developer Dashboard.")
+                        Text("2. Add the Redirect URI below to your app's settings.")
+                        Text("3. Paste the app's Client ID and Client Secret below.")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    if let dashboard = URL(string: "https://developer.spotify.com/dashboard") {
+                        Link("Open Spotify Developer Dashboard", destination: dashboard)
+                            .font(.caption)
+                    }
                 }
             }
 
@@ -84,8 +93,14 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    Button("Save Credentials") {
+                    Button("Save") {
                         saveCredentials()
+                    }
+                    .disabled(clientID.isEmpty || clientSecret.isEmpty)
+
+                    // USE-3: save and immediately start the OAuth flow.
+                    Button("Save & Connect") {
+                        saveAndConnect()
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(clientID.isEmpty || clientSecret.isEmpty)
@@ -143,6 +158,19 @@ struct SettingsView: View {
         do {
             try spotifyManager.saveCredentials(clientID: clientID, clientSecret: clientSecret)
             showingSaveConfirmation = true
+        } catch {
+            logger.error("Failed to save credentials: \(error.localizedDescription, privacy: .public)")
+            saveErrorMessage = error.localizedDescription
+            showingSaveError = true
+        }
+    }
+
+    /// USE-3: save credentials and immediately kick off the Spotify OAuth flow.
+    private func saveAndConnect() {
+        do {
+            try spotifyManager.saveCredentials(clientID: clientID, clientSecret: clientSecret)
+            dismiss()
+            spotifyManager.authenticate()
         } catch {
             logger.error("Failed to save credentials: \(error.localizedDescription, privacy: .public)")
             saveErrorMessage = error.localizedDescription

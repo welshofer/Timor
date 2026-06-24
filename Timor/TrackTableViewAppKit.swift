@@ -66,6 +66,17 @@ private enum TrackColumn: String, CaseIterable {
         }
     }
 
+    /// ATTR-3: the like column gets an SF Symbol header instead of a raw "♥" glyph.
+    func applyHeader(to tableColumn: NSTableColumn) {
+        guard self == .liked else {
+            tableColumn.title = title
+            return
+        }
+        let headerCell = NSTableHeaderCell(textCell: "")
+        headerCell.image = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: "Liked")
+        tableColumn.headerCell = headerCell
+    }
+
     func text(for track: SpotifyManager.Track) -> String {
         switch self {
         case .title: return track.name
@@ -112,7 +123,7 @@ struct TrackTableRepresentable: NSViewRepresentable {
 
         for column in TrackColumn.allCases {
             let tableColumn = NSTableColumn(identifier: column.id)
-            tableColumn.title = column.title
+            column.applyHeader(to: tableColumn)  // ATTR-3
             tableColumn.width = column.width
             tableColumn.minWidth = column.minWidth
             if column.comparator(ascending: true) != nil {

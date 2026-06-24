@@ -343,6 +343,15 @@ struct RangeSlider: View {
     let bounds: ClosedRange<Double>
     let step: Double
 
+    // ATTR-4: a more native-looking thumb (bordered, softer shadow).
+    private var thumb: some View {
+        Circle()
+            .fill(.white)
+            .overlay(Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+            .frame(width: 18, height: 18)
+            .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
@@ -360,12 +369,9 @@ struct RangeSlider: View {
                     .frame(width: rangeWidth(width: width), height: 4)
                     .offset(x: leftOffset(width: width))
 
-                // Lower thumb
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 16, height: 16)
-                    .shadow(radius: 2)
-                    .offset(x: leftOffset(width: width) - 8)
+                // Lower thumb (ATTR-4 styling, USE-1 accessibility)
+                thumb
+                    .offset(x: leftOffset(width: width) - 9)
                     .gesture(
                         DragGesture()
                             .onChanged { value in
@@ -375,13 +381,19 @@ struct RangeSlider: View {
                                 }
                             }
                     )
+                    .accessibilityElement()
+                    .accessibilityLabel("Minimum")
+                    .accessibilityValue("\(Int(range.lowerBound))")
+                    .accessibilityAdjustableAction { direction in
+                        let lower = direction == .increment
+                            ? min(range.upperBound - step, range.lowerBound + step)
+                            : max(bounds.lowerBound, range.lowerBound - step)
+                        range = lower...range.upperBound
+                    }
 
                 // Upper thumb
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 16, height: 16)
-                    .shadow(radius: 2)
-                    .offset(x: rightOffset(width: width) - 8)
+                thumb
+                    .offset(x: rightOffset(width: width) - 9)
                     .gesture(
                         DragGesture()
                             .onChanged { value in
@@ -391,6 +403,15 @@ struct RangeSlider: View {
                                 }
                             }
                     )
+                    .accessibilityElement()
+                    .accessibilityLabel("Maximum")
+                    .accessibilityValue("\(Int(range.upperBound))")
+                    .accessibilityAdjustableAction { direction in
+                        let upper = direction == .increment
+                            ? min(bounds.upperBound, range.upperBound + step)
+                            : max(range.lowerBound + step, range.upperBound - step)
+                        range = range.lowerBound...upper
+                    }
             }
             .frame(height: height)
         }

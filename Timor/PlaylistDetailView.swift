@@ -174,21 +174,41 @@ struct CacheStalenessIndicator: View {
 
 struct LoadingTracksView: View {
     @ObservedObject var spotifyManager: SpotifyManager
-    
+
     var body: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-            if spotifyManager.loadingProgress.total > 0 {
-                Text("Loading \(spotifyManager.loadingProgress.current) of \(spotifyManager.loadingProgress.total) tracks...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Loading tracks...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            // ATTR-5: skeleton placeholder rows hint at the incoming track list.
+            ForEach(0..<10, id: \.self) { _ in
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 4) {
+                        RoundedRectangle(cornerRadius: 3).frame(width: 180, height: 11)
+                        RoundedRectangle(cornerRadius: 3).frame(width: 120, height: 9)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+            }
+            Spacer()
+        }
+        .redacted(reason: .placeholder)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .center) {
+            VStack(spacing: 8) {
+                ProgressView()
+                if spotifyManager.loadingProgress.total > 0 {
+                    Text("Loading \(spotifyManager.loadingProgress.current) of \(spotifyManager.loadingProgress.total) tracks…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Loading tracks…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
