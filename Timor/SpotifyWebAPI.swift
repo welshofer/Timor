@@ -945,8 +945,8 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return nil
     }
 
-    func fetchUserPlaylists() async -> [SpotifyManager.Playlist] {
-        guard let accessToken = accessToken else { return [] }
+    func fetchUserPlaylists() async -> (playlists: [SpotifyManager.Playlist], complete: Bool) {
+        guard let accessToken = accessToken else { return ([], true) }
 
         // Get current user ID if we don't have it
         if currentUserId == nil {
@@ -958,6 +958,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         var offset = 0
         let limit = Constants.Spotify.playlistFetchLimit
         var hasMore = true
+        var complete = true  // REL-2: did we page through everything without error?
 
         while hasMore {
             guard let url = URL(string: "\(baseURL)/me/playlists?limit=\(limit)&offset=\(offset)") else { break }
@@ -974,7 +975,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                         return await fetchUserPlaylists()
                     } else {
                         logout()
-                        return []
+                        return ([], false)
                     }
                 }
 
@@ -996,11 +997,12 @@ class SpotifyWebAPI: NSObject, ObservableObject {
                 offset += limit
             } catch {
                 spotifyAPILogger.error("Error fetching playlists: \(error)")
+                complete = false  // REL-2: stopped short — surface this to the user
                 hasMore = false
             }
         }
 
-        return allPlaylists
+        return (allPlaylists, complete)
     }
 
     func fetchPlaylistTracks(playlistId: String, progressHandler: ((Int, Int) -> Void)? = nil) async -> [SpotifyManager.Track] {
@@ -1103,7 +1105,7 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         return parts.joined(separator: " ")
     }
 
-    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50) async -> [SpotifyManager.Track] {
+    func searchTracks(title: String = "", artist: String = "", album: String = "", year: String = "", limit: Int = 50, offset: Int = 0) async -> [SpotifyManager.Track] {
         guard let accessToken = accessToken else { return [] }
 
         // FUNC-3: relaxed query — single-word terms unquoted (partial match), phrases quoted.
@@ -1115,7 +1117,9 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
 
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
-        guard let url = URL(string: "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)") else { return [] }
+        // FUNC-5: offset enables "Load more" pagination beyond the first 50.
+        let searchPath = "\(baseURL)/search?q=\(encodedQuery)&type=track&limit=\(limit)&offset=\(offset)"
+        guard let url = URL(string: searchPath) else { return [] }
 
         spotifyAPILogger.debug("Search query: \(query)")
         spotifyAPILogger.debug("Search URL: \(url.absoluteString)")
@@ -1136,7 +1140,10 @@ class SpotifyWebAPI: NSObject, ObservableObject {
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
                 if await refreshAccessToken() {
-                    return await searchTracks(title: title, artist: artist, album: album, year: year, limit: limit)
+                    return await searchTracks(
+                        title: title, artist: artist, album: album,
+                        year: year, limit: limit, offset: offset
+                    )
                 } else {
                     logout()
                     return []
@@ -1291,6 +1298,31 @@ class SpotifyWebAPI: NSObject, ObservableObject {
         }
 
         return ([], 0)
+    }
+
+    /// FUNC-4: Returns the subset of `ids` that resolve to real Spotify tracks (GET /tracks?ids=).
+    func fetchExistingTrackIds(_ ids: [String]) async -> Set<String> {
+        guard let accessToken = accessToken, !ids.isEmpty else { return [] }
+        var valid: Set<String> = []
+        for chunk in ids.chunked(into: Constants.Spotify.trackCheckBatchSize) {
+            let idsParam = chunk.joined(separator: ",")
+            guard let encoded = idsParam.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "\(baseURL)/tracks?ids=\(encoded)") else { continue }
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            do {
+                let (data, _) = try await rateLimitedRequest(for: request)
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let tracks = json["tracks"] as? [Any?] {
+                    for case let track as [String: Any] in tracks {
+                        if let id = track["id"] as? String { valid.insert(id) }
+                    }
+                }
+            } catch {
+                spotifyAPILogger.error("Track validation error: \(error)")
+            }
+        }
+        return valid
     }
 
     func checkSavedTracks(trackIds: [String]) async -> [Bool] {

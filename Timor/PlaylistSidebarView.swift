@@ -34,6 +34,9 @@ struct PlaylistSidebarView: View {
     @State private var playlistToDelete: SpotifyManager.Playlist?
     @State private var showDeleteConfirmation = false
     @State private var showDeleteError = false
+    // FUNC-2: playlist rename
+    @State private var playlistToRename: SpotifyManager.Playlist?
+    @State private var renamePlaylistText = ""
 
     var filteredPlaylists: [SpotifyManager.Playlist] {
         if showOnlyEditablePlaylists {
@@ -96,6 +99,7 @@ struct PlaylistSidebarView: View {
                                 selectPlaylist(playlist)
                             },
                             onDeletePlaylist: { playlistToDelete = $0; showDeleteConfirmation = true },
+                            onRenamePlaylist: { playlistToRename = $0; renamePlaylistText = $0.name },
                             onRenameFolder: {
                                 folderToRename = folder
                                 renameFolderText = folder.name
@@ -122,6 +126,7 @@ struct PlaylistSidebarView: View {
                                         selectPlaylist(playlist)
                                     },
                                     onDelete: { playlistToDelete = $0; showDeleteConfirmation = true },
+                                    onRename: { playlistToRename = $0; renamePlaylistText = $0.name },
                                     spotifyManager: spotifyManager
                                 )
                             }
@@ -200,6 +205,18 @@ struct PlaylistSidebarView: View {
                 }
             )
         }
+        .sheet(item: $playlistToRename) { playlist in
+            RenamePlaylistSheet(
+                playlistName: $renamePlaylistText,
+                onRename: {
+                    let id = playlist.id
+                    let newName = renamePlaylistText
+                    playlistToRename = nil
+                    Task { _ = await spotifyManager.renamePlaylist(id, newName: newName) }
+                },
+                onCancel: { playlistToRename = nil }
+            )
+        }
         .confirmationDialog(
             "Delete Playlist?",
             isPresented: $showDeleteConfirmation,
@@ -276,6 +293,7 @@ struct FolderSection: View {
     let currentPlaylistId: String?
     let onSelectPlaylist: (SpotifyManager.Playlist) -> Void
     let onDeletePlaylist: (SpotifyManager.Playlist) -> Void
+    let onRenamePlaylist: (SpotifyManager.Playlist) -> Void
     let onRenameFolder: () -> Void
     let onDeleteFolder: () -> Void
     let onToggleExpand: () -> Void
@@ -297,6 +315,7 @@ struct FolderSection: View {
                         onSelectPlaylist(playlist)
                     },
                     onDelete: onDeletePlaylist,
+                    onRename: onRenamePlaylist,
                     spotifyManager: spotifyManager
                 )
             }
@@ -356,16 +375,18 @@ struct PlaylistRow: View {
     let currentPlaylistId: String?
     let onSelect: () -> Void
     let onDelete: (SpotifyManager.Playlist) -> Void
+    let onRename: (SpotifyManager.Playlist) -> Void
     let spotifyManager: SpotifyManager
 
     @State private var isDropTargeted = false
 
-    init(playlist: SpotifyManager.Playlist, isSelected: Bool, currentPlaylistId: String? = nil, onSelect: @escaping () -> Void, onDelete: @escaping (SpotifyManager.Playlist) -> Void = { _ in }, spotifyManager: SpotifyManager) {
+    init(playlist: SpotifyManager.Playlist, isSelected: Bool, currentPlaylistId: String? = nil, onSelect: @escaping () -> Void, onDelete: @escaping (SpotifyManager.Playlist) -> Void = { _ in }, onRename: @escaping (SpotifyManager.Playlist) -> Void = { _ in }, spotifyManager: SpotifyManager) {
         self.playlist = playlist
         self.isSelected = isSelected
         self.currentPlaylistId = currentPlaylistId
         self.onSelect = onSelect
         self.onDelete = onDelete
+        self.onRename = onRename
         self.spotifyManager = spotifyManager
     }
 
@@ -489,6 +510,11 @@ struct PlaylistRow: View {
             }
 
             if playlist.isEditable {
+                Button {
+                    onRename(playlist)
+                } label: {
+                    Label("Rename Playlist…", systemImage: "pencil")
+                }
                 Button(role: .destructive) {
                     onDelete(playlist)
                 } label: {
@@ -641,6 +667,37 @@ struct RenameFolderSheet: View {
                 .keyboardShortcut(.return)
                 .disabled(folderName.trimmingCharacters(in: .whitespaces).isEmpty)
                 .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(Constants.UI.largePadding)
+        .frame(minWidth: Constants.UI.editPlaylistMinWidth)
+    }
+}
+
+// MARK: - Rename Playlist Sheet (FUNC-2)
+
+struct RenamePlaylistSheet: View {
+    @Binding var playlistName: String
+    let onRename: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: Constants.UI.itemSpacing) {
+            Text("Rename Playlist")
+                .font(.headline)
+
+            TextField("Playlist Name", text: $playlistName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: Constants.UI.sidebarMinWidth)
+
+            HStack {
+                Button("Cancel") { onCancel() }
+                    .keyboardShortcut(.escape)
+
+                Button("Rename") { onRename() }
+                    .keyboardShortcut(.return)
+                    .disabled(playlistName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .buttonStyle(.borderedProminent)
             }
         }
         .padding(Constants.UI.largePadding)

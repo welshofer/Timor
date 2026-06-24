@@ -28,6 +28,10 @@ struct TrackSearchView: View {
     @State private var isAdding = false
     @State private var sortOrder = [KeyPathComparator(\SpotifyManager.Track.name)]
     @State private var showAddError = false
+    // FUNC-5: pagination
+    @State private var searchOffset = 0
+    @State private var canLoadMore = false
+    private let searchPageSize = 50
 
     var body: some View {
         VStack(spacing: 0) {
@@ -114,6 +118,12 @@ struct TrackSearchView: View {
                     Text("\(searchResults.count) results")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    if canLoadMore {
+                        Button("Load More") { Task { await loadMore() } }
+                            .font(.caption)
+                            .buttonStyle(.link)
+                            .disabled(isSearching)
+                    }
                     Spacer()
                     Text("Click column headers to sort")
                         .font(.caption)
@@ -201,19 +211,42 @@ struct TrackSearchView: View {
         Task {
             isSearching = true
             selectedTracks = []
+            searchOffset = 0
 
-            let tracks = await SpotifyWebAPI.shared.searchTracks(
-                title: titleSearch.trimmingCharacters(in: .whitespacesAndNewlines),
-                artist: artistSearch.trimmingCharacters(in: .whitespacesAndNewlines),
-                album: albumSearch.trimmingCharacters(in: .whitespacesAndNewlines),
-                year: yearSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            let tracks = await searchPage(offset: 0)
 
             await MainActor.run {
                 searchResults = tracks
+                canLoadMore = tracks.count >= searchPageSize  // FUNC-5: more may exist
                 isSearching = false
             }
         }
+    }
+
+    /// FUNC-5: fetch the next page of results and append.
+    private func loadMore() async {
+        guard !isSearching else { return }
+        isSearching = true
+        let nextOffset = searchOffset + searchPageSize
+        let tracks = await searchPage(offset: nextOffset)
+        await MainActor.run {
+            searchResults.append(contentsOf: tracks)
+            searchResults.sort(using: sortOrder)
+            searchOffset = nextOffset
+            canLoadMore = tracks.count >= searchPageSize
+            isSearching = false
+        }
+    }
+
+    private func searchPage(offset: Int) async -> [SpotifyManager.Track] {
+        await SpotifyWebAPI.shared.searchTracks(
+            title: titleSearch.trimmingCharacters(in: .whitespacesAndNewlines),
+            artist: artistSearch.trimmingCharacters(in: .whitespacesAndNewlines),
+            album: albumSearch.trimmingCharacters(in: .whitespacesAndNewlines),
+            year: yearSearch.trimmingCharacters(in: .whitespacesAndNewlines),
+            limit: searchPageSize,
+            offset: offset
+        )
     }
 
     private func addSelectedTracks() {

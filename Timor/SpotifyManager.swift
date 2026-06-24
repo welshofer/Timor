@@ -427,30 +427,56 @@ class SpotifyManager: ObservableObject {
 
     func fetchPlaylists() {
         Task {
-            do {
-                let webPlaylists = await SpotifyWebAPI.shared.fetchUserPlaylists()
-                await MainActor.run {
-                    self.playlists = webPlaylists
-                    if webPlaylists.isEmpty && SpotifyWebAPI.shared.isAuthenticated {
-                        self.displayError(
-                            "Couldn't fetch your playlists",
-                            recovery: "Check your internet connection and try refreshing."
-                        )
-                    }
+            let result = await SpotifyWebAPI.shared.fetchUserPlaylists()
+            await MainActor.run {
+                self.playlists = result.playlists
+                if result.playlists.isEmpty && SpotifyWebAPI.shared.isAuthenticated {
+                    self.displayError(
+                        "Couldn't fetch your playlists",
+                        recovery: "Check your internet connection and try refreshing."
+                    )
+                } else if !result.complete {
+                    // REL-2: don't silently drop pages.
+                    self.displayError(
+                        "Couldn't load all playlists",
+                        recovery: "Some playlists may be missing. Refresh to try again."
+                    )
                 }
             }
         }
     }
 
-    func createPlaylist(name: String, description: String = "") async -> Bool {
+    /// REL-4: returns the new playlist's ID (or nil) so the caller can select it directly,
+    /// instead of sleeping and matching by name.
+    func createPlaylist(name: String, description: String = "") async -> String? {
         let playlistId = await SpotifyWebAPI.shared.createPlaylist(name: name, description: description, isPublic: false)
-
         if playlistId != nil {
-            // Refresh playlists to show the new one
-            fetchPlaylists()
-            return true
+            fetchPlaylists()  // refresh so the new playlist appears in the sidebar
         }
-        return false
+        return playlistId
+    }
+
+    /// FUNC-2: Renames a Spotify playlist (PUT /playlists/{id}) and updates the sidebar.
+    func renamePlaylist(_ playlistId: String, newName: String) async -> Bool {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let success = await SpotifyWebAPI.shared.updatePlaylistDetails(playlistId: playlistId, name: trimmed)
+        if success {
+            if let index = playlists.firstIndex(where: { $0.id == playlistId }) {
+                let existing = playlists[index]
+                playlists[index] = Playlist(
+                    id: existing.id, name: trimmed, totalTracks: existing.totalTracks,
+                    owner: existing.owner, description: existing.description, isEditable: existing.isEditable
+                )
+            }
+            if let sel = selectedPlaylist, sel.id == playlistId {
+                selectedPlaylist = Playlist(
+                    id: sel.id, name: trimmed, totalTracks: sel.totalTracks,
+                    owner: sel.owner, description: sel.description, isEditable: sel.isEditable
+                )
+            }
+        }
+        return success
     }
 
     func deletePlaylist(_ playlistId: String) async -> Bool {

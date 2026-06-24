@@ -249,31 +249,34 @@ struct CreatePlaylistSheet: View {
     
     private func createPlaylist() {
         isCreatingPlaylist = true
+        let name = newPlaylistName
+        let description = newPlaylistDescription
         Task {
-            let success = await spotifyManager.createPlaylist(
-                name: newPlaylistName,
-                description: newPlaylistDescription
-            )
-            
+            let newId = await spotifyManager.createPlaylist(name: name, description: description)
+
             await MainActor.run {
                 isCreatingPlaylist = false
-                if success {
-                    let playlistNameToSelect = newPlaylistName
-                    newPlaylistName = ""
-                    newPlaylistDescription = ""
-                    isPresented = false
-
-                    Task {
-                        try? await Task.sleep(nanoseconds: Constants.Animation.shuffleDelay)
-                        if let newPlaylist = spotifyManager.playlists.first(where: { $0.name == playlistNameToSelect }) {
-                            selectedPlaylist = newPlaylist
-                            spotifyManager.selectedPlaylist = newPlaylist
-                            spotifyManager.fetchTracksForPlaylist(newPlaylist.id)
-                        }
-                    }
-                } else {
+                guard let newId = newId else {
                     showCreateError = true
+                    return
                 }
+                newPlaylistName = ""
+                newPlaylistDescription = ""
+                isPresented = false
+
+                // REL-4: select the new playlist directly by its returned ID — no fixed
+                // sleep, no name match (which broke on slow refreshes / duplicate names).
+                let newPlaylist = SpotifyManager.Playlist(
+                    id: newId,
+                    name: name,
+                    totalTracks: 0,
+                    owner: "You",
+                    description: description.isEmpty ? nil : description,
+                    isEditable: true
+                )
+                selectedPlaylist = newPlaylist
+                spotifyManager.selectedPlaylist = newPlaylist
+                spotifyManager.fetchTracksForPlaylist(newId)
             }
         }
     }
