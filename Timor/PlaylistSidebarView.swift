@@ -17,6 +17,33 @@ import UIKit
 // MARK: - Logging
 private nonisolated(unsafe) let logger = Logger(subsystem: "com.timor", category: "playlist-sidebar")
 
+#if os(macOS)
+// MARK: - Behind-Window Vibrancy
+
+/// A behind-window vibrancy backing. Unlike SwiftUI's `.glassEffect` (which only
+/// refracts *in-window* content), `.behindWindow` blending samples the desktop /
+/// wallpaper / apps *behind the window*, giving a sidebar you can actually see
+/// through — the genuine Liquid Glass translucency on macOS 26.
+struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .sidebar
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .followsWindowActiveState
+        view.isEmphasized = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+    }
+}
+#endif
+
 struct PlaylistSidebarView: View {
     @ObservedObject var spotifyManager: SpotifyManager
     @Binding var selectedPlaylist: SpotifyManager.Playlist?
@@ -143,7 +170,7 @@ struct PlaylistSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)   // let the sidebar glass show through
+            .scrollContentBackground(.hidden)   // make rows transparent so the vibrancy shows through
             .onAppear {
                 spotifyManager.fetchFolders()
             }
@@ -156,7 +183,10 @@ struct PlaylistSidebarView: View {
                 showOnlyEditablePlaylists: $showOnlyEditablePlaylists
             )
         }
-        .glassEffect(in: .rect)   // Liquid Glass: whole-sidebar background
+        #if os(macOS)
+        // True Liquid Glass: behind-window vibrancy that lets the desktop show through.
+        .background(VisualEffectBackground(material: .sidebar).ignoresSafeArea())
+        #endif
         .navigationSplitViewColumnWidth(min: Constants.UI.sidebarMinWidth, ideal: Constants.UI.sidebarIdealWidth)
         .toolbar {
             #if os(iOS)
