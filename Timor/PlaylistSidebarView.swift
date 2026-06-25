@@ -57,8 +57,83 @@ struct PlaylistSidebarView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with network status
+        List {
+            if spotifyManager.isAuthenticated {
+                // Liked Songs special item
+                LikedSongsRow(
+                    isViewingLikedSongs: isViewingLikedSongs,
+                    onSelect: {
+                        selectedPlaylist = nil
+                        spotifyManager.selectedPlaylist = nil
+                        spotifyManager.isViewingLikedSongs = true
+                        searchText = ""
+                        selectedTracks = []
+                        isViewingLikedSongs = true
+                        spotifyManager.fetchLikedSongs()
+                    }
+                )
+
+                Divider()
+
+                // Folders with playlists
+                ForEach(spotifyManager.folders) { folder in
+                    FolderSection(
+                        folder: folder,
+                        playlists: playlistsInFolder(folder),
+                        selectedPlaylist: selectedPlaylist,
+                        currentPlaylistId: selectedPlaylist?.id,
+                        onSelectPlaylist: { playlist in
+                            selectPlaylist(playlist)
+                        },
+                        onDeletePlaylist: { playlistToDelete = $0; showDeleteConfirmation = true },
+                        onRenamePlaylist: { playlistToRename = $0; renamePlaylistText = $0.name },
+                        onRenameFolder: {
+                            folderToRename = folder
+                            renameFolderText = folder.name
+                        },
+                        onDeleteFolder: {
+                            spotifyManager.deleteFolder(folder)
+                        },
+                        onToggleExpand: {
+                            spotifyManager.toggleFolderExpansion(folder)
+                        },
+                        spotifyManager: spotifyManager
+                    )
+                }
+
+                // Uncategorized playlists
+                if !uncategorizedPlaylists.isEmpty {
+                    Section {
+                        ForEach(uncategorizedPlaylists) { playlist in
+                            PlaylistRow(
+                                playlist: playlist,
+                                isSelected: selectedPlaylist?.id == playlist.id,
+                                currentPlaylistId: selectedPlaylist?.id,
+                                onSelect: {
+                                    selectPlaylist(playlist)
+                                },
+                                onDelete: { playlistToDelete = $0; showDeleteConfirmation = true },
+                                onRename: { playlistToRename = $0; renamePlaylistText = $0.name },
+                                spotifyManager: spotifyManager
+                            )
+                        }
+                    } header: {
+                        if !spotifyManager.folders.isEmpty {
+                            Text("Uncategorized")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                EmptyPlaylistsView()
+            }
+        }
+        .listStyle(.sidebar)
+        // The List is the sidebar's root view, so it receives the NavigationSplitView sidebar's
+        // native translucent Liquid Glass material. The header and bottom controls are attached as
+        // transparent safe-area insets so the material reads across the whole column.
+        .safeAreaInset(edge: .top, spacing: 0) {
             HStack {
                 Text("Spotify Playlists")
                     .font(.headline)
@@ -68,99 +143,19 @@ struct PlaylistSidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-
-            // Playlists List
-            List {
-                if spotifyManager.isAuthenticated {
-                    // Liked Songs special item
-                    LikedSongsRow(
-                        isViewingLikedSongs: isViewingLikedSongs,
-                        onSelect: {
-                            selectedPlaylist = nil
-                            spotifyManager.selectedPlaylist = nil
-                            spotifyManager.isViewingLikedSongs = true
-                            searchText = ""
-                            selectedTracks = []
-                            isViewingLikedSongs = true
-                            spotifyManager.fetchLikedSongs()
-                        }
-                    )
-
-                    Divider()
-
-                    // Folders with playlists
-                    ForEach(spotifyManager.folders) { folder in
-                        FolderSection(
-                            folder: folder,
-                            playlists: playlistsInFolder(folder),
-                            selectedPlaylist: selectedPlaylist,
-                            currentPlaylistId: selectedPlaylist?.id,
-                            onSelectPlaylist: { playlist in
-                                selectPlaylist(playlist)
-                            },
-                            onDeletePlaylist: { playlistToDelete = $0; showDeleteConfirmation = true },
-                            onRenamePlaylist: { playlistToRename = $0; renamePlaylistText = $0.name },
-                            onRenameFolder: {
-                                folderToRename = folder
-                                renameFolderText = folder.name
-                            },
-                            onDeleteFolder: {
-                                spotifyManager.deleteFolder(folder)
-                            },
-                            onToggleExpand: {
-                                spotifyManager.toggleFolderExpansion(folder)
-                            },
-                            spotifyManager: spotifyManager
-                        )
-                    }
-
-                    // Uncategorized playlists
-                    if !uncategorizedPlaylists.isEmpty {
-                        Section {
-                            ForEach(uncategorizedPlaylists) { playlist in
-                                PlaylistRow(
-                                    playlist: playlist,
-                                    isSelected: selectedPlaylist?.id == playlist.id,
-                                    currentPlaylistId: selectedPlaylist?.id,
-                                    onSelect: {
-                                        selectPlaylist(playlist)
-                                    },
-                                    onDelete: { playlistToDelete = $0; showDeleteConfirmation = true },
-                                    onRename: { playlistToRename = $0; renamePlaylistText = $0.name },
-                                    spotifyManager: spotifyManager
-                                )
-                            }
-                        } header: {
-                            if !spotifyManager.folders.isEmpty {
-                                Text("Uncategorized")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                } else {
-                    EmptyPlaylistsView()
-                }
-            }
-            .listStyle(.sidebar)
-            // A List nested in a VStack paints its own opaque background, which hides the
-            // NavigationSplitView sidebar's native translucent Liquid Glass material. Hiding
-            // the scroll background (with NO opaque .background over it) reveals it.
-            .scrollContentBackground(.hidden)
-            .onAppear {
-                spotifyManager.fetchFolders()
-            }
-
-            Divider()
-
-            // Bottom controls
-            SpotifyControlsView(
-                spotifyManager: spotifyManager,
-                showOnlyEditablePlaylists: $showOnlyEditablePlaylists
-            )
         }
-        // macOS 26 renders the NavigationSplitView sidebar with a translucent Liquid
-        // Glass material automatically — no manual NSVisualEffectView / window hacking.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                SpotifyControlsView(
+                    spotifyManager: spotifyManager,
+                    showOnlyEditablePlaylists: $showOnlyEditablePlaylists
+                )
+            }
+        }
+        .onAppear {
+            spotifyManager.fetchFolders()
+        }
         .navigationSplitViewColumnWidth(min: Constants.UI.sidebarMinWidth, ideal: Constants.UI.sidebarIdealWidth)
         .toolbar {
             #if os(iOS)
