@@ -29,7 +29,7 @@ private enum TrackColumn: String, CaseIterable {
         case .album: return "Album"
         case .releaseDate: return "Release Date"
         case .duration: return "Duration"
-        case .liked: return "♥"
+        case .liked: return "Liked"
         }
     }
 
@@ -40,7 +40,7 @@ private enum TrackColumn: String, CaseIterable {
         case .artist, .album: return 180
         case .releaseDate: return 120
         case .duration: return 70
-        case .liked: return 28
+        case .liked: return 54   // fits the "Liked" header; fixed width (see maxWidth)
         }
     }
 
@@ -77,13 +77,7 @@ private enum TrackColumn: String, CaseIterable {
 
     /// ATTR-3: the like column gets an SF Symbol header instead of a raw "♥" glyph.
     func applyHeader(to tableColumn: NSTableColumn) {
-        guard self == .liked else {
-            tableColumn.title = title
-            return
-        }
-        let headerCell = NSTableHeaderCell(textCell: "")
-        headerCell.image = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: "Liked")
-        tableColumn.headerCell = headerCell
+        tableColumn.title = title
     }
 
     func text(for track: SpotifyManager.Track) -> String {

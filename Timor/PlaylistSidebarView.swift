@@ -143,6 +143,7 @@ struct PlaylistSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)   // let the sidebar glass show through
             .onAppear {
                 spotifyManager.fetchFolders()
             }
@@ -155,6 +156,7 @@ struct PlaylistSidebarView: View {
                 showOnlyEditablePlaylists: $showOnlyEditablePlaylists
             )
         }
+        .glassEffect(in: .rect)   // Liquid Glass: whole-sidebar background
         .navigationSplitViewColumnWidth(min: Constants.UI.sidebarMinWidth, ideal: Constants.UI.sidebarIdealWidth)
         .toolbar {
             #if os(iOS)
@@ -594,9 +596,8 @@ struct SpotifyControlsView: View {
             }
         }
         .padding(12)
-        #if os(macOS)
-        .glassEffect(in: .rect)  // Liquid Glass: sidebar bottom controls
-        #else
+        // Transparent — sits on the sidebar's own Liquid Glass background.
+        #if !os(macOS)
         .background(Color(UIColor.secondarySystemBackground))
         #endif
     }
