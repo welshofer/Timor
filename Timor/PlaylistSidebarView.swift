@@ -143,6 +143,10 @@ struct PlaylistSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            // A List nested in a VStack paints its own opaque background, which hides the
+            // NavigationSplitView sidebar's native translucent Liquid Glass material. Hiding
+            // the scroll background (with NO opaque .background over it) reveals it.
+            .scrollContentBackground(.hidden)
             .onAppear {
                 spotifyManager.fetchFolders()
             }
