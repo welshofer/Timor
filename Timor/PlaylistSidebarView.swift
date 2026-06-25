@@ -595,7 +595,7 @@ struct SpotifyControlsView: View {
         }
         .padding(12)
         #if os(macOS)
-        .background(Color(NSColor.controlBackgroundColor))
+        .glassEffect(in: .rect)  // Liquid Glass: sidebar bottom controls
         #else
         .background(Color(UIColor.secondarySystemBackground))
         #endif
@@ -742,7 +742,11 @@ struct NetworkStatusIndicator: View {
 /// Small playlist cover, decoded off the main thread via ImageCache's downsampled thumbnail path.
 struct PlaylistCoverThumbnail: View {
     let urlString: String?
+    var size: CGFloat = 36
     @State private var image: PlatformImage?
+
+    private var cornerRadius: CGFloat { size >= 56 ? 10 : 4 }
+    private var maxPixel: CGFloat { size * 3 }  // crisp on Retina
 
     var body: some View {
         Group {
@@ -751,27 +755,27 @@ struct PlaylistCoverThumbnail: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(Color.gray.opacity(0.2))
                     .overlay(
                         Image(systemName: "music.note.list")
-                            .font(.caption)
+                            .font(.system(size: size * 0.4))
                             .foregroundStyle(.secondary)
                     )
             }
         }
-        .frame(width: 36, height: 36)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .accessibilityHidden(true)
         .task(id: urlString) {
             guard let urlString = urlString, !urlString.isEmpty else {
                 image = nil
                 return
             }
-            if let cached = ImageCache.shared.cachedThumbnail(for: urlString, maxPixel: 80) {
+            if let cached = ImageCache.shared.cachedThumbnail(for: urlString, maxPixel: maxPixel) {
                 image = cached
             } else {
-                image = await ImageCache.shared.thumbnail(for: urlString, maxPixel: 80)
+                image = await ImageCache.shared.thumbnail(for: urlString, maxPixel: maxPixel)
             }
         }
     }

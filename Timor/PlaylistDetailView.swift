@@ -46,9 +46,7 @@ struct PlaylistDetailView: View {
                 searchText: searchText,
                 filteredTracksCount: filteredTracks.count
             )
-            
-            Divider()
-            
+
             // Tracks content - Table on macOS, List on iOS for drag reorder
             if spotifyManager.isLoadingTracks {
                 LoadingTracksView(spotifyManager: spotifyManager)
@@ -108,20 +106,24 @@ struct PlaylistHeader: View {
     let filteredTracksCount: Int
     
     var body: some View {
-        HStack {
+        HStack(spacing: 16) {
+            // Liquid Glass hero: cover art (or Liked Songs glyph) beside the title.
+            if isViewingLikedSongs {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.red)
+                    .frame(width: 72, height: 72)
+                    .glassEffect(in: .rect(cornerRadius: 12))
+                    .accessibilityHidden(true)
+            } else {
+                PlaylistCoverThumbnail(urlString: selectedPlaylist?.coverArtURL, size: 72)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    if isViewingLikedSongs {
-                        Image(systemName: "heart.fill")
-                            .foregroundColor(.red)
-                            .font(.largeTitle)
-                            .accessibilityHidden(true)
-                    }
-                    Text(isViewingLikedSongs ? "Liked Songs" : (selectedPlaylist?.name ?? ""))
-                        .font(.largeTitle)
-                        .bold()
-                }
-                
+                Text(isViewingLikedSongs ? "Liked Songs" : (selectedPlaylist?.name ?? ""))
+                    .font(.largeTitle)
+                    .bold()
+
                 HStack(spacing: 4) {
                     if isViewingLikedSongs {
                         Text("\(spotifyManager.currentPlaylistTracks.count) liked songs")
@@ -145,10 +147,13 @@ struct PlaylistHeader: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             }
-            
+
             Spacer()
         }
         .padding()
+        .glassEffect(in: .rect(cornerRadius: 16))   // Liquid Glass header banner
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 }
 

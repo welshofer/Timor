@@ -54,6 +54,15 @@ private enum TrackColumn: String, CaseIterable {
         }
     }
 
+    /// Artwork and the like column are fixed; text columns absorb slack so the heart column
+    /// stays a tight, fixed-width affordance on the right edge.
+    var maxWidth: CGFloat {
+        switch self {
+        case .artwork, .liked: return width
+        default: return 10_000
+        }
+    }
+
     func comparator(ascending: Bool) -> KeyPathComparator<SpotifyManager.Track>? {
         let order: SortOrder = ascending ? .forward : .reverse
         switch self {
@@ -112,6 +121,9 @@ struct TrackTableRepresentable: NSViewRepresentable {
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.rowHeight = 36
         tableView.style = .inset
+        // Distribute slack across resizable (text) columns so the fixed artwork/like columns
+        // stay tight — the like column is a small, fixed affordance, not a wide empty band.
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.headerView = NSTableHeaderView()
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
@@ -126,6 +138,7 @@ struct TrackTableRepresentable: NSViewRepresentable {
             column.applyHeader(to: tableColumn)  // ATTR-3
             tableColumn.width = column.width
             tableColumn.minWidth = column.minWidth
+            tableColumn.maxWidth = column.maxWidth
             if column.comparator(ascending: true) != nil {
                 tableColumn.sortDescriptorPrototype = NSSortDescriptor(key: column.rawValue, ascending: true)
             }
